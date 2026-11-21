@@ -240,6 +240,9 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
     pool.query(`${SELECT_VOTER} ORDER BY v.verified_at DESC LIMIT 6`),
     pool.query('SELECT count(*)::int AS n FROM review_queue'),
   ]);
+  const money = (await pool.query(
+    'SELECT count(*) FILTER (WHERE money_given)::int AS given, count(*)::int AS total FROM voters'
+  )).rows[0];
   const pendingUsers = req.user.role === 'admin'
     ? (await pool.query('SELECT count(*)::int AS n FROM users WHERE NOT approved')).rows[0].n
     : 0;
@@ -248,6 +251,8 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
     today: today.rows[0].n,
     pending_review: pending.rows[0].n,
     pending_users: pendingUsers,
+    money_given: money.given,
+    money_total: money.total,
     top_streets: streets.rows,
     volunteers: volunteers.rows,
     daily: daily.rows,
@@ -256,13 +261,32 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
 }));
 
 // ---------- voters ----------
+// Creates the family for this mobile if it doesn't exist yet (the creator is
+// the volunteer who adds its first member). Returns { id, created }.
+async function ensureFamily(client, mobile, userId) {
+  const { rows } = await client.query(
+    `INSERT INTO families (mobile, created_by) VALUES ($1, $2)
+     ON CONFLICT (mobile) DO UPDATE SET mobile = EXCLUDED.mobile
+     RETURNING id, (xmax = 0) AS created`,
+    [mobile, userId]
+  );
+  return rows[0];
+}
+
 async function insertVoter(client, v, userId, reviewedIds = []) {
+  const fam = await ensureFamily(client, v.mobile, userId);
   const { rows } = await client.query(
     `INSERT INTO voters (name, name_key, serial_no, mobile, street, street_key, family_votes, notes, reviewed_matches, verified_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
     [v.name, v.name_key, v.serial_no, v.mobile, v.street, v.street_key, v.family_votes, v.notes, reviewedIds, userId]
   );
-  return rows[0].id;
+  return { id: rows[0].id, family_id: fam.id, family_created: fam.created };
+}
+
+// "F-0012", "f12", "12" -> 12 ; anything else -> null
+function parseFamilyId(q) {
+  const m = String(q || '').trim().match(/^f?\s*-?\s*0*(\d{1,9})$/i);
+  return m ? Number(m[1]) : null;
 }
 
 // Live check while the volunteer types (fields may be partial).
@@ -299,9 +323,9 @@ app.post('/api/voters', auth, wrap(async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'Possible duplicate - please review.', needs_confirmation: true, ...dup });
     }
-    const id = await insertVoter(client, v, req.user.id, dup.matches.map((m) => m.id));
+    const saved = await insertVoter(client, v, req.user.id, dup.matches.map((m) => m.id));
     await client.query('COMMIT');
-    res.status(201).json({ id });
+    res.status(201).json(saved);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     if (e.code === '23505') return res.status(409).json({ error: 'This voter is already verified.', level: 'exact', matches: [] });
@@ -328,6 +352,11 @@ app.get('/api/voters', auth, wrap(async (req, res) => {
       params.push(`%${digits}%`);
       conds.push(`v.mobile LIKE $${params.length}`);
     }
+    const fid = parseFamilyId(q);
+    if (fid !== null) {
+      params.push(fid);
+      conds.push(`f.id = $${params.length}`);
+    }
     where.push(`(${conds.join(' OR ')})`);
   }
   if (street) {
@@ -341,7 +370,7 @@ app.get('/api/voters', auth, wrap(async (req, res) => {
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const [list, count] = await Promise.all([
     pool.query(`${SELECT_VOTER} ${whereSql} ORDER BY v.verified_at DESC LIMIT ${size} OFFSET ${(page - 1) * size}`, params),
-    pool.query(`SELECT count(*)::int AS n FROM voters v ${whereSql}`, params),
+    pool.query(`SELECT count(*)::int AS n FROM voters v LEFT JOIN families f ON f.mobile = v.mobile ${whereSql}`, params),
   ]);
   res.json({ voters: list.rows, total: count.rows[0].n, page, pages: Math.max(1, Math.ceil(count.rows[0].n / size)) });
 }));
@@ -359,6 +388,7 @@ app.put('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
   if (error) return res.status(400).json({ error });
   const dup = await findDuplicates(v, { excludeId: id });
   if (dup.level === 'exact') return res.status(409).json({ error: 'Another verified voter already has these details.', ...dup });
+  await ensureFamily(pool, v.mobile, req.user.id);
   try {
     const r = await pool.query(
       `UPDATE voters SET name=$1, name_key=$2, serial_no=$3, mobile=$4, street=$5, street_key=$6, family_votes=$7, notes=$8, updated_at=now()
@@ -376,6 +406,124 @@ app.put('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
 app.delete('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
   await pool.query('DELETE FROM voters WHERE id = $1', [Number(req.params.id)]);
   res.json({ ok: true });
+}));
+
+// ---------- families ----------
+const FAMILY_SELECT = `
+  SELECT f.id, f.mobile, f.created_at, cu.full_name AS created_by_name,
+         count(v.id)::int AS member_count, max(v.family_votes)::int AS family_votes, min(v.street) AS street,
+         count(v.id) FILTER (WHERE v.money_given)::int AS money_count,
+         json_agg(json_build_object('id', v.id, 'name', v.name, 'serial_no', v.serial_no,
+                  'verified_by_name', vu.full_name, 'verified_at', v.verified_at,
+                  'money_given', v.money_given, 'money_at', v.money_at, 'money_by_name', mu.full_name)
+                  ORDER BY v.verified_at) AS members
+  FROM families f
+  JOIN voters v ON v.mobile = f.mobile
+  LEFT JOIN users vu ON vu.id = v.verified_by
+  LEFT JOIN users mu ON mu.id = v.money_by
+  LEFT JOIN users cu ON cu.id = f.created_by`;
+const FAMILY_GROUP = 'GROUP BY f.id, cu.full_name';
+
+app.get('/api/families', auth, wrap(async (req, res) => {
+  const q = clean(req.query.q);
+  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+  const size = 20;
+  const params = [];
+  const where = ['EXISTS (SELECT 1 FROM voters x WHERE x.mobile = f.mobile)'];
+
+  if (q) {
+    params.push(`%${q.toLowerCase()}%`);
+    const p = params.length;
+    const conds = [`EXISTS (SELECT 1 FROM voters x WHERE x.mobile = f.mobile AND
+      (lower(x.name) LIKE $${p} OR lower(x.serial_no) LIKE $${p} OR lower(x.street) LIKE $${p}))`];
+    const digits = q.replace(/\D/g, '');
+    if (digits.length >= 3) {
+      params.push(`%${digits}%`);
+      conds.push(`f.mobile LIKE $${params.length}`);
+    }
+    const fid = parseFamilyId(q);
+    if (fid !== null) {
+      params.push(fid);
+      conds.push(`f.id = $${params.length}`);
+    }
+    where.push(`(${conds.join(' OR ')})`);
+  }
+  // money=done: every member ticked ; money=pending: at least one member not ticked
+  if (req.query.money === 'done') where.push('NOT EXISTS (SELECT 1 FROM voters x WHERE x.mobile = f.mobile AND NOT x.money_given)');
+  if (req.query.money === 'pending') where.push('EXISTS (SELECT 1 FROM voters x WHERE x.mobile = f.mobile AND NOT x.money_given)');
+  if (req.query.street) {
+    params.push(normStreet(req.query.street));
+    where.push(`EXISTS (SELECT 1 FROM voters x WHERE x.mobile = f.mobile AND x.street_key = $${params.length})`);
+  }
+  if (req.query.mine === '1') {
+    params.push(req.user.id);
+    where.push(`f.created_by = $${params.length}`);
+  }
+  const whereSql = `WHERE ${where.join(' AND ')}`;
+  const [list, count] = await Promise.all([
+    pool.query(`${FAMILY_SELECT} ${whereSql} ${FAMILY_GROUP}
+                ORDER BY f.id DESC LIMIT ${size} OFFSET ${(page - 1) * size}`, params),
+    pool.query(`SELECT count(*)::int AS n FROM families f ${whereSql}`, params),
+  ]);
+  res.json({ families: list.rows, total: count.rows[0].n, page, pages: Math.max(1, Math.ceil(count.rows[0].n / size)) });
+}));
+
+app.get('/api/families/:id', auth, wrap(async (req, res) => {
+  const { rows } = await pool.query(`${FAMILY_SELECT} WHERE f.id = $1 ${FAMILY_GROUP}`, [Number(req.params.id)]);
+  if (!rows[0]) return res.status(404).json({ error: 'Family not found.' });
+  res.json({ family: rows[0] });
+}));
+
+// Tick / untick "money given" for ONE voter. Anyone can tick; only the admin can untick.
+app.post('/api/voters/:id/money', auth, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const given = req.body.given === true;
+  if (!given && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the admin can untick money. Ask your admin if this was a mistake.' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT v.money_given, u.full_name AS money_by_name FROM voters v
+       LEFT JOIN users u ON u.id = v.money_by WHERE v.id = $1 FOR UPDATE OF v`,
+      [id]
+    );
+    if (!rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Voter not found.' });
+    }
+    if (rows[0].money_given === given) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: given ? `Already ticked by ${rows[0].money_by_name || 'someone'}.` : 'Money is already unticked.',
+      });
+    }
+    await client.query(
+      given
+        ? 'UPDATE voters SET money_given = TRUE, money_by = $2, money_at = now() WHERE id = $1'
+        : 'UPDATE voters SET money_given = FALSE, money_by = NULL, money_at = NULL WHERE id = $1',
+      given ? [id, req.user.id] : [id]
+    );
+    await client.query('INSERT INTO money_log (voter_id, given, user_id) VALUES ($1, $2, $3)', [id, given, req.user.id]);
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  const { rows } = await pool.query(`${SELECT_VOTER} WHERE v.id = $1`, [id]);
+  res.json({ voter: rows[0] });
+}));
+
+app.get('/api/voters/:id/money-log', auth, wrap(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT l.given, l.at, u.full_name AS by_name FROM money_log l
+     LEFT JOIN users u ON u.id = l.user_id WHERE l.voter_id = $1 ORDER BY l.at DESC LIMIT 50`,
+    [Number(req.params.id)]
+  );
+  res.json(rows);
 }));
 
 // ---------- bulk upload & review queue ----------
@@ -462,12 +610,23 @@ app.post('/api/review/:id/:action', auth, wrap(async (req, res) => {
 }));
 
 app.get('/api/export.csv', auth, adminOnly, wrap(async (req, res) => {
-  const { rows } = await pool.query(`${SELECT_VOTER} ORDER BY v.street, v.mobile, v.name`);
+  const { rows } = await pool.query(
+    `SELECT v.name, v.serial_no, v.mobile, v.street, v.family_votes, v.notes, v.verified_at,
+            u.full_name AS verified_by_name, f.id AS family_id, cu.full_name AS family_created_by,
+            v.money_given, mu.full_name AS money_by_name, v.money_at
+     FROM voters v LEFT JOIN users u ON u.id = v.verified_by
+     LEFT JOIN families f ON f.mobile = v.mobile
+     LEFT JOIN users cu ON cu.id = f.created_by
+     LEFT JOIN users mu ON mu.id = v.money_by
+     ORDER BY f.id, v.verified_at`
+  );
   const esc = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-  const lines = ['Name,Serial No,Mobile,Street,Family Votes,Notes,Verified By,Verified At'];
+  const when = (d) => (d ? new Date(d).toLocaleString('en-IN', { timeZone: TZ }) : '');
+  const fid = (n) => (n ? `F-${String(n).padStart(4, '0')}` : '');
+  const lines = ['Family ID,Name,Serial No,Mobile,Street,Family Votes,Notes,Verified By,Verified At,Family Created By,Money Given,Money Ticked By,Money Ticked At'];
   for (const r of rows) {
-    lines.push([r.name, r.serial_no, r.mobile, r.street, r.family_votes, r.notes, r.verified_by_name,
-      new Date(r.verified_at).toLocaleString('en-IN', { timeZone: TZ })].map(esc).join(','));
+    lines.push([fid(r.family_id), r.name, r.serial_no, r.mobile, r.street, r.family_votes, r.notes, r.verified_by_name,
+      when(r.verified_at), r.family_created_by, r.money_given ? 'Yes' : 'No', r.money_by_name, when(r.money_at)].map(esc).join(','));
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="34-division-voters-${new Date().toISOString().slice(0, 10)}.csv"`);

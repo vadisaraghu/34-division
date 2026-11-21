@@ -32,6 +32,10 @@
     arrow: '<path d="M5 12h14M12 5l7 7-7 7"/>',
     more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
     family: '<path d="M3 21v-2a4 4 0 0 1 4-4h2M17 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 21v-1a3 3 0 0 0-3-3h-2a3 3 0 0 0-3 3v1"/>',
+    rupee: '<path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3a5 5 0 0 0 0-10"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    box: '<rect x="3" y="3" width="18" height="18" rx="4"/>',
+    boxcheck: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/>',
   };
   const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
 
@@ -43,6 +47,7 @@
   const initials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const fmtNum = (n) => Number(n || 0).toLocaleString('en-IN');
   const fmtMobile = (m) => (m && m.length === 10 ? `${m.slice(0, 5)} ${m.slice(5)}` : m || '');
+  const fid = (n) => (n ? `F-${String(n).padStart(4, '0')}` : '');
 
   function timeAgo(iso) {
     const d = new Date(iso);
@@ -114,6 +119,7 @@
     dashboard: { title: 'Dashboard', render: viewDashboard },
     add: { title: 'Add voter', render: viewAdd },
     voters: { title: 'Voters', render: viewVoters },
+    families: { title: 'Families', render: viewFamilies },
     review: { title: 'Review', render: viewReview },
     team: { title: 'Volunteers', render: viewTeam, admin: true },
     upload: { title: 'Upload list', render: viewUpload, admin: true },
@@ -303,6 +309,7 @@
     $('#side-nav').innerHTML = `
       ${navItem('dashboard', 'home', 'Dashboard')}
       ${navItem('add', 'plus', 'Add voter')}
+      ${navItem('families', 'family', 'Families')}
       ${navItem('voters', 'list', 'Voters')}
       ${navItem('review', 'inbox', 'Review queue', pendingBadge)}
       ${isAdmin() ? `<div class="nav-label">Admin</div>
@@ -313,14 +320,85 @@
       `<a href="#/${name}" class="${active === name ? 'active' : ''}">${icon(ic)}<span>${label}</span>${extra}</a>`;
     $('#tabbar').innerHTML = `
       ${tab('dashboard', 'home', 'Home')}
-      ${tab('voters', 'list', 'Voters')}
+      ${tab('families', 'family', 'Families')}
       <a href="#/add" class="fab" aria-label="Add voter"><span class="circle">${icon('plus')}</span></a>
-      ${tab('review', 'inbox', 'Review', `<span class="dot ${state.pending ? '' : 'hidden'}" data-pending>${state.pending}</span>`)}
-      ${tab('account', 'more', 'More')}`;
+      ${tab('voters', 'list', 'Voters')}
+      ${tab('account', 'more', 'More', `<span class="dot ${state.pending ? '' : 'hidden'}" data-pending>${state.pending}</span>`)}`;
+  }
+
+  // ---------------------------------------------------------------- money check-box (per voter)
+  // Renders the box for one voter. Shows who ticked it and when.
+  function moneyControl(v) {
+    const canUntick = isAdmin();
+    if (v.money_given) {
+      return `<div class="money-wrap" data-mwrap="${v.id}">
+        <button type="button" class="money-box on" data-money="${v.id}" data-given="true" data-name="${esc(v.name)}"
+          ${canUntick ? '' : 'aria-disabled="true"'} title="${canUntick ? 'Untick (admin)' : 'Money given'}">${icon('boxcheck')}<span>Money given</span></button>
+        <span class="money-by">by <b>${esc(v.money_by_name || '—')}</b> · ${esc(timeAgo(v.money_at))}</span>
+        <button type="button" class="linkish money-hist" data-mlog="${v.id}" data-name="${esc(v.name)}" title="Money history">${icon('clock')}</button>
+      </div>`;
+    }
+    return `<div class="money-wrap" data-mwrap="${v.id}">
+      <button type="button" class="money-box" data-money="${v.id}" data-given="false" data-name="${esc(v.name)}">${icon('box')}<span>Money</span></button>
+    </div>`;
+  }
+
+  // One delegated handler for every money box on any page.
+  document.addEventListener('click', async (e) => {
+    const box = e.target.closest('[data-money]');
+    const hist = e.target.closest('[data-mlog]');
+    if (hist) {
+      const log = await api('GET', `/api/voters/${hist.dataset.mlog}/money-log`).catch(fail);
+      if (!log) return;
+      openModal({
+        title: 'Money history',
+        sub: esc(hist.dataset.name),
+        body: log.length ? `<ul class="rank-list" style="padding:0">${log.map((l) => `
+          <li style="padding:10px 0"><span class="name">${l.given ? '✅ Ticked' : '↩️ Unticked'} by <b>${esc(l.by_name || '—')}</b></span>
+          <span class="muted" style="font-size:13px">${esc(new Date(l.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}</span></li>`).join('')}</ul>`
+          : '<p class="muted">No changes yet.</p>',
+        foot: '<button class="btn btn-primary" data-close>Close</button>',
+      });
+      return;
+    }
+    if (!box) return;
+    const given = box.dataset.given === 'true';
+    if (given && !isAdmin()) { toast('Only the admin can untick money.', 'err'); return; }
+    const m = openModal({
+      title: given ? 'Untick money?' : 'Mark money given?',
+      sub: given
+        ? `This removes the money tick for <b>${esc(box.dataset.name)}</b>. The change is kept in the history.`
+        : `For <b>${esc(box.dataset.name)}</b>. Your name (<b>${esc(state.user.full_name)}</b>) and the time will be recorded.`,
+      foot: `<button class="btn btn-ghost" data-close>Cancel</button>
+             <button class="btn ${given ? 'btn-danger' : 'btn-success'}" id="do-money">${icon(given ? 'x' : 'check')}${given ? 'Untick' : 'Yes, money given'}</button>`,
+    });
+    $('#do-money', m).addEventListener('click', async (ev) => {
+      busy(ev.currentTarget, true, 'Saving…');
+      try {
+        const { voter } = await api('POST', `/api/voters/${box.dataset.money}/money`, { given: !given });
+        closeModal();
+        toast(given ? 'Money unticked' : `Money marked for ${voter.name}`);
+        $$(`[data-mwrap="${voter.id}"]`).forEach((w) => { w.outerHTML = moneyControl(voter); });
+        $$('[data-family-card]').forEach(updateFamilySummary);
+      } catch (er) {
+        fail(er);
+        busy(ev.currentTarget, false);
+        if (er.status === 409) { closeModal(); router(); }
+      }
+    });
+  });
+
+  function updateFamilySummary(card) {
+    const total = $$('.money-box', card).length;
+    const done = $$('.money-box.on', card).length;
+    const b = $('.money-sum', card);
+    if (!b) return;
+    b.className = `badge money-sum ${done === total ? 'badge-green' : done ? 'badge-amber' : 'badge-gray'}`;
+    b.innerHTML = `${icon('rupee')}${done}/${total} money`;
   }
 
   // ---------------------------------------------------------------- shared renderers
-  function voterRow(v, { matched = [], level = '', actions = '' } = {}) {
+  function voterRow(v, { matched = [], level = '', actions = '', money = false } = {}) {
     const hl = (field, html) => (matched.includes(field) ? `<span class="hl">${html}</span>` : html);
     const nameHl = matched.includes('name') || matched.includes('similar name');
     const levelBadge = level === 'exact' ? '<span class="badge badge-red">Already verified</span>'
@@ -332,7 +410,8 @@
       <div class="voter-row ${level}">
         <div class="avatar">${esc(initials(v.name))}</div>
         <div class="body">
-          <div class="top"><span class="vname">${nameHl ? `<span class="hl">${esc(v.name)}</span>` : esc(v.name)}</span>${levelBadge}</div>
+          <div class="top"><span class="vname">${nameHl ? `<span class="hl">${esc(v.name)}</span>` : esc(v.name)}</span>${levelBadge}
+            ${v.family_id ? `<a class="fam-chip" href="#/families?q=${fid(v.family_id)}" title="Open family">${icon('family')}${fid(v.family_id)}</a>` : ''}</div>
           <div class="meta">
             <span>${icon('hash')}${hl('serial no', esc(v.serial_no))}</span>
             <span>${icon('phone')}${hl('mobile', esc(fmtMobile(v.mobile)))}</span>
@@ -341,6 +420,7 @@
           </div>
           <div class="by">Verified by ${esc(v.verified_by_name || '—')} · ${esc(timeAgo(v.verified_at))}${v.notes ? ` · ${esc(v.notes)}` : ''}</div>
           ${matched.length ? `<div class="chips" style="margin-top:6px">${matched.map((m) => `<span class="badge badge-gray">same ${esc(m)}</span>`).join('')}</div>` : ''}
+          ${money ? `<div style="margin-top:8px">${moneyControl(v)}</div>` : ''}
         </div>
         ${actions ? `<div class="actions">${actions}</div>` : ''}
       </div>`;
@@ -405,8 +485,9 @@
           <div class="value mono">${fmtNum(s.families)}</div><div class="hint">unique mobile numbers</div></div>
         <div class="card stat"><div class="label"><span class="ico g">${icon('vote')}</span>Family votes</div>
           <div class="value mono">${fmtNum(s.family_votes)}</div><div class="hint">total votes across families</div></div>
-        <div class="card stat"><div class="label"><span class="ico b">${icon('pin')}</span>Streets</div>
-          <div class="value mono">${fmtNum(s.streets)}</div><div class="hint">streets covered</div></div>
+        <a class="card stat" href="#/families" style="text-decoration:none"><div class="label"><span class="ico b">${icon('rupee')}</span>Money given</div>
+          <div class="value mono">${fmtNum(s.money_given)}<span class="muted" style="font-size:18px;font-weight:600"> / ${fmtNum(s.money_total)}</span></div>
+          <div class="hint">voters ticked · ${fmtNum(s.streets)} streets</div></a>
       </div>
       <div class="grid grid-2" style="margin-top:20px">
         <div class="card"><div class="card-head"><h3>Verifications · last 7 days</h3><span class="badge badge-gray">${fmtNum(s.daily.reduce((a, d) => a + d.n, 0))} total</span></div>
@@ -534,7 +615,7 @@
     });
     panel.addEventListener('click', (e) => {
       const b = e.target.closest('[data-family]');
-      if (b) location.hash = `#/voters?mobile=${encodeURIComponent(b.dataset.family)}`;
+      if (b) location.hash = `#/families?q=${encodeURIComponent(b.dataset.family)}`;
     });
     $('#dup-inline').addEventListener('click', () => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     $('#clear-btn').addEventListener('click', () => { if (location.hash === '#/add') router(); else location.hash = '#/add'; });
@@ -558,9 +639,9 @@
       const btn = $('button[type=submit]', form);
       busy(btn, true, 'Saving…');
       try {
-        await api('POST', '/api/voters', { ...v, confirm_different: confirmDifferent });
+        const saved = await api('POST', '/api/voters', { ...v, confirm_different: confirmDifferent });
         closeModal();
-        showSaved(v);
+        showSaved(v, saved);
       } catch (e) {
         if (e.status === 409 && e.data.level === 'exact') {
           closeModal();
@@ -591,13 +672,17 @@
       $('#confirm-save', m).addEventListener('click', (e) => { busy(e.currentTarget, true, 'Saving…'); save(true); });
     }
 
-    function showSaved(v) {
+    function showSaved(v, saved) {
       toast(`${v.name} verified`);
       const m = openModal({
         title: '',
         body: `<div class="success-card"><div class="ico">${icon('check')}</div>
           <h2 style="font-size:22px">${esc(v.name)} is verified</h2>
-          <p class="muted" style="margin:6px 0 0">Serial ${esc(v.serial_no)} · ${esc(v.street)}</p></div>`,
+          <p class="muted" style="margin:6px 0 12px">Serial ${esc(v.serial_no)} · ${esc(v.street)}</p>
+          <a class="fam-chip lg" href="#/families?q=${fid(saved.family_id)}">${icon('family')}Family ${fid(saved.family_id)}</a>
+          <p class="muted" style="margin:10px 0 0;font-size:13.5px">${saved.family_created
+            ? `New family created by <b>${esc(state.user.full_name)}</b>`
+            : 'Added to an existing family'}</p></div>`,
         foot: `<button class="btn btn-ghost" id="s-new">${icon('plus')}New family</button>
                <button class="btn btn-brand" id="s-family">${icon('family')}Add family member</button>`,
       });
@@ -623,7 +708,7 @@
         <a class="btn btn-sm btn-primary" href="#/voters" style="margin-left:0">Show all</a></div>` : ''}
       <div class="card">
         <div class="toolbar">
-          <label class="search">${icon('search')}<input class="input" id="v-q" placeholder="Search name, serial, mobile or street" value="${esc(q.q)}" type="search" /></label>
+          <label class="search">${icon('search')}<input class="input" id="v-q" placeholder="Search name, serial, family ID, mobile or street" value="${esc(q.q)}" type="search" /></label>
           <select class="select" id="v-street"><option value="">All streets</option></select>
         </div>
         <div id="v-list"><div class="card-pad"><div class="skeleton" style="height:200px"></div></div></div>
@@ -644,7 +729,7 @@
         ${isAdmin() ? `<button class="icon-btn" data-edit="${v.id}" title="Edit">${icon('edit')}</button>
         <button class="icon-btn" data-del="${v.id}" title="Delete">${icon('trash')}</button>` : ''}`;
       $('#v-list').innerHTML = r.voters.length
-        ? r.voters.map((v) => voterRow(v, { actions: acts(v) })).join('')
+        ? r.voters.map((v) => voterRow(v, { actions: acts(v), money: true })).join('')
         : emptyState('search', 'No voters found', q.q || q.street ? 'Try a different search or street.' : 'Verified voters will appear here.');
       $('#v-list').__data = r.voters;
       $('#v-foot').innerHTML = r.pages > 1 ? `
@@ -664,7 +749,7 @@
       const ed = e.target.closest('[data-edit]');
       const del = e.target.closest('[data-del]');
       const data = $('#v-list').__data || [];
-      if (fam) location.hash = `#/voters?mobile=${encodeURIComponent(fam.dataset.family)}`;
+      if (fam) location.hash = `#/families?q=${encodeURIComponent(fam.dataset.family)}`;
       if (ed) editModal(data.find((v) => v.id === Number(ed.dataset.edit)), () => load().catch(fail));
       if (del) {
         const v = data.find((x) => x.id === Number(del.dataset.del));
@@ -705,6 +790,77 @@
       try { await api('PUT', `/api/voters/${v.id}`, body); closeModal(); toast('Voter updated'); onDone(); }
       catch (er) { fail(er); busy(e.currentTarget, false); }
     });
+  }
+
+  // ---------------------------------------------------------------- families
+  function familyCard(f) {
+    const addMember = `#/add?mobile=${encodeURIComponent(f.mobile)}&street=${encodeURIComponent(f.street)}&fv=${f.family_votes}`;
+    return `
+      <div class="card fam-card" data-family-card>
+        <div class="fam-head">
+          <span class="fam-id">${fid(f.id)}</span>
+          <div class="fam-title">
+            <b>${esc(f.street)}</b>
+            <div class="meta"><span>${icon('phone')}${esc(fmtMobile(f.mobile))}</span><span>${icon('vote')}${esc(f.family_votes)} family votes</span><span>${icon('users')}${f.member_count} verified</span></div>
+          </div>
+          <span class="badge money-sum"></span>
+        </div>
+        <div class="fam-created">${icon('user')}Family created by <b>${esc(f.created_by_name || '—')}</b> · ${esc(timeAgo(f.created_at))}</div>
+        <div class="fam-members">
+          ${f.members.map((m) => `
+            <div class="fam-member">
+              <div class="avatar">${esc(initials(m.name))}</div>
+              <div class="body"><b>${esc(m.name)}</b>
+                <div class="muted" style="font-size:12.5px"># ${esc(m.serial_no)} · added by ${esc(m.verified_by_name || '—')}</div></div>
+              ${moneyControl(m)}
+            </div>`).join('')}
+        </div>
+        <div class="fam-foot"><a class="btn btn-sm btn-ghost" href="${addMember}">${icon('plus')}Add member</a></div>
+      </div>`;
+  }
+
+  async function viewFamilies(el, params) {
+    const q = { q: params.get('q') || '', money: '', street: '', mine: '', page: 1 };
+    el.innerHTML = `
+      <div class="page-head"><div><h1>Families</h1><p id="f-count">Loading…</p></div>
+        <a class="btn btn-brand" href="#/add">${icon('plus')}Add voter</a></div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="toolbar" style="border-bottom:0">
+          <label class="search">${icon('search')}<input class="input" id="f-q" type="search" value="${esc(q.q)}"
+            placeholder="Search family ID (F-0012), name, serial or mobile" /></label>
+          <select class="select" id="f-money"><option value="">All families</option><option value="pending">Money pending</option><option value="done">Money done for all</option></select>
+          <select class="select" id="f-street"><option value="">All streets</option></select>
+          <select class="select" id="f-mine"><option value="">Created by anyone</option><option value="1">Created by me</option></select>
+        </div>
+      </div>
+      <div id="f-list" class="fam-grid"><div class="card card-pad"><div class="skeleton" style="height:200px"></div></div></div>
+      <div class="list-foot" id="f-foot" style="border:0;padding:16px 0"></div>`;
+
+    loadStreets().then((list) => {
+      $('#f-street').innerHTML = '<option value="">All streets</option>' + list.map((s) => `<option value="${esc(s.street)}">${esc(s.street)}</option>`).join('');
+    });
+
+    async function load() {
+      const usp = new URLSearchParams({ q: q.q, money: q.money, street: q.street, mine: q.mine, page: q.page });
+      const r = await api('GET', `/api/families?${usp}`);
+      $('#f-count').textContent = `${fmtNum(r.total)} famil${r.total === 1 ? 'y' : 'ies'}${q.q || q.money || q.street || q.mine ? ' match your search' : ''}`;
+      $('#f-list').innerHTML = r.families.length ? r.families.map(familyCard).join('')
+        : `<div class="card">${emptyState('family', 'No families found', q.q ? 'Try a family ID like F-0012, a name or a mobile number.' : 'Families appear when voters are added.')}</div>`;
+      $$('[data-family-card]').forEach(updateFamilySummary);
+      $('#f-foot').innerHTML = r.pages > 1 ? `<span>Page ${r.page} of ${r.pages}</span>
+        <span style="display:flex;gap:8px"><button class="btn btn-sm btn-ghost" data-page="${r.page - 1}" ${r.page <= 1 ? 'disabled' : ''}>Previous</button>
+        <button class="btn btn-sm btn-ghost" data-page="${r.page + 1}" ${r.page >= r.pages ? 'disabled' : ''}>Next</button></span>` : '';
+    }
+    const reload = () => { q.page = 1; load().catch(fail); };
+    $('#f-q').addEventListener('input', debounce((e) => { q.q = e.target.value.trim(); reload(); }, 300));
+    $('#f-money').addEventListener('change', (e) => { q.money = e.target.value; reload(); });
+    $('#f-street').addEventListener('change', (e) => { q.street = e.target.value; reload(); });
+    $('#f-mine').addEventListener('change', (e) => { q.mine = e.target.value; reload(); });
+    $('#f-foot').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-page]');
+      if (b) { q.page = Number(b.dataset.page); load().catch(fail); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    });
+    await load();
   }
 
   // ---------------------------------------------------------------- review queue
@@ -993,6 +1149,22 @@
             <div class="avatar" style="width:56px;height:56px;font-size:20px">${esc(initials(u.full_name))}</div>
             <div><h2 style="font-size:20px">${esc(u.full_name)}</h2><div class="muted">@${esc(u.username)} · <span style="text-transform:capitalize">${esc(u.role)}</span></div></div>
           </div>
+          ${isStandalone() ? '' : `<div class="card card-pad install-card">
+            <div style="display:flex;gap:14px;align-items:center">
+              <div class="logo-mark">34</div>
+              <div style="flex:1"><b>Install the 34 Division app</b>
+                <div class="muted" style="font-size:13px">Opens full-screen from your home screen, like a normal app.</div></div>
+            </div>
+            <button class="btn btn-brand btn-block hidden" data-install style="margin-top:14px">${icon('download')}Install app</button>
+            <p class="muted" style="font-size:12.5px;margin:12px 0 0"><b>Android (Chrome):</b> tap ⋮ menu → <i>Add to Home screen</i> / <i>Install app</i>.<br/>
+              <b>iPhone (Safari):</b> tap the Share button → <i>Add to Home Screen</i>.</p>
+          </div>`}
+          <div class="card"><div class="card-head"><h3>Menu</h3></div>
+            <div class="nav" style="padding:8px">
+              <a href="#/families">${icon('family')}<span>Families &amp; money</span></a>
+              <a href="#/voters">${icon('list')}<span>All voters</span></a>
+              <a href="#/review">${icon('inbox')}<span>Review queue</span><span class="badge badge-red ${state.pending ? '' : 'hidden'}" data-pending>${state.pending}</span></a>
+            </div></div>
           ${isAdmin() ? `<div class="card"><div class="card-head"><h3>Admin tools</h3></div>
             <div class="nav" style="padding:8px">
               <a href="#/upload">${icon('upload')}<span>Upload voter list</span></a>
@@ -1023,6 +1195,22 @@
       busy(btn, false);
     });
   }
+
+  // ---------------------------------------------------------------- install as app (PWA)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
+  let installPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installPrompt = e;
+    $$('[data-install]').forEach((b) => b.classList.remove('hidden'));
+  });
+  document.addEventListener('click', async (e) => {
+    if (!e.target.closest('[data-install]')) return;
+    if (installPrompt) { installPrompt.prompt(); installPrompt = null; $$('[data-install]').forEach((b) => b.classList.add('hidden')); }
+  });
+  const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 
   // ---------------------------------------------------------------- boot
   (async () => {

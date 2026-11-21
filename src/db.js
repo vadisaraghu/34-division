@@ -63,6 +63,33 @@ CREATE INDEX IF NOT EXISTS voters_mobile_idx ON voters (mobile);
 CREATE INDEX IF NOT EXISTS voters_street_idx ON voters (street_key);
 CREATE INDEX IF NOT EXISTS voters_name_trgm ON voters USING gin (name_key gin_trgm_ops);
 
+-- One family = everyone sharing a mobile number. Records who created it
+-- (the volunteer who added its first member).
+CREATE TABLE IF NOT EXISTS families (
+  id          SERIAL PRIMARY KEY,
+  mobile      TEXT NOT NULL UNIQUE,
+  created_by  INT REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Money check-box per voter, with who ticked it and when.
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS money_given BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS money_by INT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS money_at TIMESTAMPTZ;
+
+-- Full history of every money tick / untick.
+CREATE TABLE IF NOT EXISTS money_log (
+  id         SERIAL PRIMARY KEY,
+  voter_id   INT NOT NULL REFERENCES voters(id) ON DELETE CASCADE,
+  given      BOOLEAN NOT NULL,
+  user_id    INT REFERENCES users(id) ON DELETE SET NULL,
+  at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Backfill families for voters saved before families existed.
+INSERT INTO families (mobile, created_by, created_at)
+SELECT DISTINCT ON (mobile) mobile, verified_by, verified_at FROM voters ORDER BY mobile, verified_at
+ON CONFLICT (mobile) DO NOTHING;
+
 -- Rows from a bulk upload that look like possible duplicates wait here
 -- until a volunteer decides "different person" or "duplicate".
 CREATE TABLE IF NOT EXISTS review_queue (

@@ -240,6 +240,60 @@ textarea.input { height: auto; min-height: 80px; padding: 12px 14px; resize: ver
 .section-cap svg { width: 15px; height: 15px; }
 .voter-row.family { background: #FBFEFC; }
 .dup-inline { display: none; }
+a.stat { color: inherit; }
+a.stat:hover { border-color: var(--ink-3); }
+
+/* ---------- family chip ---------- */
+.fam-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 8px;
+  background: var(--ink); color: var(--brand); font-size: 12px; font-weight: 800; letter-spacing: .02em;
+  text-decoration: none; font-variant-numeric: tabular-nums;
+}
+.fam-chip svg { width: 13px; height: 13px; }
+.fam-chip.lg { font-size: 15px; padding: 6px 14px; border-radius: 10px; }
+.fam-chip.lg svg { width: 17px; height: 17px; }
+
+/* ---------- family cards ---------- */
+.fam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 18px; align-items: start; }
+.fam-card { overflow: hidden; }
+.fam-head { display: flex; gap: 14px; align-items: center; padding: 18px 20px 12px; }
+.fam-id {
+  background: var(--ink); color: var(--brand); font-weight: 800; font-size: 15px; letter-spacing: .02em;
+  padding: 10px 12px; border-radius: 12px; font-variant-numeric: tabular-nums; flex: none;
+}
+.fam-title { flex: 1; min-width: 0; }
+.fam-title b { font-size: 16px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fam-title .meta { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.fam-title .meta span { display: inline-flex; align-items: center; gap: 4px; }
+.fam-title .meta svg { width: 13px; height: 13px; color: var(--ink-3); }
+.money-sum svg { width: 13px; height: 13px; }
+.fam-created { display: flex; align-items: center; gap: 8px; margin: 0 20px 12px; padding: 9px 12px; border-radius: 10px; background: var(--brand-soft); font-size: 13px; color: var(--ink-2); }
+.fam-created svg { width: 15px; height: 15px; color: var(--brand-strong); flex: none; }
+.fam-created b { color: var(--ink); }
+.fam-members { border-top: 1px solid var(--line); }
+.fam-member { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.fam-member .avatar { width: 32px; height: 32px; font-size: 12px; background: var(--bg); color: var(--ink); }
+.fam-member .body { flex: 1; min-width: 140px; }
+.fam-member .body b { font-size: 14.5px; }
+.fam-foot { padding: 12px 20px; display: flex; justify-content: flex-end; }
+
+/* ---------- money check-box ---------- */
+.money-wrap { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.money-box {
+  display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px 0 10px; border-radius: 10px;
+  border: 1.5px solid var(--line); background: var(--surface); font-weight: 700; font-size: 13.5px; cursor: pointer; color: var(--ink-2);
+  transition: background .15s, border-color .15s;
+}
+.money-box svg { width: 20px; height: 20px; }
+.money-box:hover { border-color: var(--green); color: var(--green); }
+.money-box.on { background: var(--green); border-color: var(--green); color: #fff; }
+.money-box.on:hover { background: #0E8A44; color: #fff; }
+.money-box[aria-disabled="true"] { cursor: default; }
+.money-by { font-size: 12.5px; color: var(--ink-2); }
+.money-by b { color: var(--ink); }
+.money-hist { color: var(--ink-3); display: inline-grid; place-items: center; text-decoration: none; }
+.money-hist svg { width: 16px; height: 16px; }
+.money-hist:hover { color: var(--ink); }
 a.avatar { text-decoration: none; }
 
 .voter-row { display: flex; gap: 14px; padding: 14px 22px; border-bottom: 1px solid var(--line); align-items: flex-start; }
@@ -396,6 +450,12 @@ a.avatar { text-decoration: none; }
 
   .card-pad { padding: 18px; }
   .card-head, .toolbar, .list-foot { padding-left: 16px; padding-right: 16px; }
+  .fam-grid { grid-template-columns: 1fr; gap: 14px; }
+  .fam-head { padding: 16px 16px 10px; }
+  .fam-created { margin: 0 16px 12px; }
+  .fam-member { padding: 12px 16px; }
+  .fam-member .money-wrap { width: 100%; padding-left: 44px; }
+  .fam-foot { padding: 10px 16px; }
   .voter-row { padding: 14px 16px; flex-wrap: wrap; }
   .voter-row .body { flex-basis: calc(100% - 48px); }
   .voter-row .actions { width: 100%; padding-left: 48px; }
