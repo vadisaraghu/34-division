@@ -180,24 +180,8 @@ app.post('/api/setup', wrap(async (req, res) => {
   res.status(201).json({ user: { id, username: u.username, full_name: u.full_name, role: 'admin' } });
 }));
 
-// Volunteer self-registration: account stays locked until an admin approves it.
-app.post('/api/signup', wrap(async (req, res) => {
-  if (tooManyAttempts('signup|' + req.ip)) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
-  const { value: u, error } = validateNewUser(req.body);
-  if (error) return res.status(400).json({ error });
-  const { rows } = await pool.query('SELECT count(*)::int AS n FROM users');
-  if (rows[0].n === 0) return res.status(409).json({ error: 'The admin account has not been set up yet.' });
-  try {
-    await pool.query(
-      "INSERT INTO users (username, full_name, password_hash, mobile, role, approved) VALUES ($1,$2,$3,$4,'volunteer',FALSE)",
-      [u.username, u.full_name, await bcrypt.hash(u.password, 10), u.mobile]
-    );
-  } catch (e) {
-    if (e.code === '23505') return res.status(409).json({ error: 'That username is taken. Try another one.' });
-    throw e;
-  }
-  res.status(201).json({ ok: true });
-}));
+// Note: there is no public sign-up. Only the admin creates volunteer accounts
+// (POST /api/users).
 
 app.post('/api/logout', wrap(async (req, res) => {
   const token = parseCookies(req.headers.cookie).sid;
@@ -415,7 +399,8 @@ const FAMILY_SELECT = `
          count(v.id) FILTER (WHERE v.money_given)::int AS money_count,
          json_agg(json_build_object('id', v.id, 'name', v.name, 'serial_no', v.serial_no,
                   'verified_by_name', vu.full_name, 'verified_at', v.verified_at,
-                  'money_given', v.money_given, 'money_at', v.money_at, 'money_by_name', mu.full_name)
+                  'money_given', v.money_given, 'money_at', v.money_at, 'money_by_name', mu.full_name,
+                  'money_logged', EXISTS (SELECT 1 FROM money_log ml WHERE ml.voter_id = v.id))
                   ORDER BY v.verified_at) AS members
   FROM families f
   JOIN voters v ON v.mobile = f.mobile
@@ -474,13 +459,11 @@ app.get('/api/families/:id', auth, wrap(async (req, res) => {
   res.json({ family: rows[0] });
 }));
 
-// Tick / untick "money given" for ONE voter. Anyone can tick; only the admin can untick.
+// Tick / undo "money given" for ONE voter. Any signed-in user can do either;
+// every change is recorded in money_log with who did it and when.
 app.post('/api/voters/:id/money', auth, wrap(async (req, res) => {
   const id = Number(req.params.id);
   const given = req.body.given === true;
-  if (!given && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the admin can untick money. Ask your admin if this was a mistake.' });
-  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -496,7 +479,7 @@ app.post('/api/voters/:id/money', auth, wrap(async (req, res) => {
     if (rows[0].money_given === given) {
       await client.query('ROLLBACK');
       return res.status(409).json({
-        error: given ? `Already ticked by ${rows[0].money_by_name || 'someone'}.` : 'Money is already unticked.',
+        error: given ? `Already ticked by ${rows[0].money_by_name || 'someone'}.` : 'Money tick was already undone.',
       });
     }
     await client.query(

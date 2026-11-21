@@ -7,7 +7,8 @@ const SELECT_VOTER = `
   SELECT v.id, v.name, v.name_key, v.serial_no, v.mobile, v.street, v.street_key, v.family_votes,
          v.notes, v.verified_at, u.full_name AS verified_by_name,
          f.id AS family_id, fu.full_name AS family_created_by,
-         v.money_given, v.money_at, mu.full_name AS money_by_name
+         v.money_given, v.money_at, mu.full_name AS money_by_name,
+         EXISTS (SELECT 1 FROM money_log ml WHERE ml.voter_id = v.id) AS money_logged
   FROM voters v LEFT JOIN users u ON u.id = v.verified_by
   LEFT JOIN families f ON f.mobile = v.mobile
   LEFT JOIN users fu ON fu.id = f.created_by

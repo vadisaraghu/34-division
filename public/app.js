@@ -34,6 +34,7 @@
     family: '<path d="M3 21v-2a4 4 0 0 1 4-4h2M17 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 21v-1a3 3 0 0 0-3-3h-2a3 3 0 0 0-3 3v1"/>',
     rupee: '<path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3a5 5 0 0 0 0-10"/>',
     clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
     box: '<rect x="3" y="3" width="18" height="18" rx="4"/>',
     boxcheck: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/>',
   };
@@ -49,14 +50,29 @@
   const fmtMobile = (m) => (m && m.length === 10 ? `${m.slice(0, 5)} ${m.slice(5)}` : m || '');
   const fid = (n) => (n ? `F-${String(n).padStart(4, '0')}` : '');
 
+  const TE = () => window.I18N && window.I18N.lang === 'te';
+  const LOCALE = () => (TE() ? 'te-IN' : 'en-IN');
+  const fmtDateTime = (d) => new Date(d).toLocaleString(LOCALE(), { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+
   function timeAgo(iso) {
     const d = new Date(iso);
     const s = (Date.now() - d.getTime()) / 1000;
-    if (s < 60) return 'just now';
-    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-    return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    if (s < 60) return TE() ? 'ఇప్పుడే' : 'just now';
+    if (s < 3600) return TE() ? `${Math.floor(s / 60)} ని. క్రితం` : `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return TE() ? `${Math.floor(s / 3600)} గం. క్రితం` : `${Math.floor(s / 3600)}h ago`;
+    return fmtDateTime(d);
   }
+
+  // English / తెలుగు switch (shown on login, sidebar, top bar and More page).
+  const langSwitch = (extra = '') => `
+    <div class="lang-switch ${extra}" data-nt role="group" aria-label="Language">
+      <button type="button" data-lang="en" class="${TE() ? '' : 'on'}">EN</button>
+      <button type="button" data-lang="te" class="${TE() ? 'on' : ''}" lang="te">తెలుగు</button>
+    </div>`;
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-lang]');
+    if (b && window.I18N && b.dataset.lang !== window.I18N.lang) window.I18N.setLang(b.dataset.lang);
+  });
 
   async function api(method, url, body) {
     const res = await fetch(url, {
@@ -156,7 +172,7 @@
   // ---------------------------------------------------------------- login
   // mode: 'login' | 'signup' | 'setup' (first run, creates the admin)
   function renderLogin(mode = 'login') {
-    document.title = `${mode === 'login' ? 'Sign in' : mode === 'setup' ? 'Set up' : 'Create account'} · 34 Division`;
+    document.title = `${mode === 'setup' ? 'Set up' : 'Sign in'} · 34 Division`;
     $('#app').innerHTML = `
       <div class="login-wrap">
         <section class="login-hero">
@@ -172,7 +188,7 @@
           </div>
           <div class="brand-sub">© ${new Date().getFullYear()} 34 Division</div>
         </section>
-        <section class="login-panel">${authCard(mode)}</section>
+        <section class="login-panel">${langSwitch('corner')}<div id="auth-slot">${authCard(mode)}</div></section>
       </div>`;
     wireAuthCard(mode);
   }
@@ -197,20 +213,10 @@
       return `<form class="login-card" id="auth-form" autocomplete="on">
         <span class="badge badge-ink" style="margin-bottom:14px">First-time setup</span>
         <h2>Create the admin account</h2>
-        <p class="muted">This is the first sign-in for 34 Division. The account you create now will be the <b>admin</b>. You can add volunteers after this.</p>
+        <p class="muted">This is the first sign-in for 34 Division. The account you create now will be the admin. You can add volunteers after this.</p>
         ${userFields}
         <div id="auth-err" class="banner banner-red hidden"></div>
         <button class="btn btn-brand btn-block" type="submit">${icon('shield')}Create admin account</button>
-      </form>`;
-    }
-    if (mode === 'signup') {
-      return `<form class="login-card" id="auth-form" autocomplete="on">
-        <h2>Create your account</h2>
-        <p class="muted">Volunteers can sign up here. Your admin must approve your account before you can sign in.</p>
-        ${userFields}
-        <div id="auth-err" class="banner banner-red hidden"></div>
-        <button class="btn btn-primary btn-block" type="submit">Create account ${icon('arrow')}</button>
-        <p class="muted" style="text-align:center;margin:18px 0 0">Already have an account? <button type="button" class="linkish" data-mode="login" style="font-weight:700;color:var(--ink)">Sign in</button></p>
       </form>`;
     }
     return `<form class="login-card" id="auth-form" autocomplete="on">
@@ -222,7 +228,7 @@
         <input class="input" id="p" name="password" type="password" autocomplete="current-password" required /></div>
       <div id="auth-err" class="banner banner-red hidden"></div>
       <button class="btn btn-primary btn-block" type="submit">Sign in ${icon('arrow')}</button>
-      <p class="muted" style="text-align:center;margin:18px 0 0">New volunteer? <button type="button" class="linkish" data-mode="signup" style="font-weight:700;color:var(--ink)">Create an account</button></p>
+      <p class="muted" style="text-align:center;margin:18px 0 0;font-size:13.5px">Volunteer accounts are created by the admin.</p>
     </form>`;
   }
 
@@ -235,7 +241,7 @@
     };
     form.addEventListener('click', (e) => {
       const b = e.target.closest('[data-mode]');
-      if (b) { $('.login-panel').innerHTML = authCard(b.dataset.mode); wireAuthCard(b.dataset.mode); }
+      if (b) { $('#auth-slot').innerHTML = authCard(b.dataset.mode); wireAuthCard(b.dataset.mode); }
     });
     const enter = async (user) => {
       state.user = user;
@@ -258,18 +264,9 @@
           const { user } = await api('POST', '/api/setup', body);
           toast('Admin account created. Welcome!');
           await enter(user);
-        } else {
-          await api('POST', '/api/signup', body);
-          $('.login-panel').innerHTML = `
-            <div class="login-card"><div class="success-card" style="padding:0">
-              <div class="ico">${icon('check')}</div>
-              <h2 style="font-size:22px">Account created</h2>
-              <p class="muted" style="margin:8px 0 22px">Your username is <b>${esc(body.username.toLowerCase())}</b>. Ask your admin to approve your account. Then you can sign in.</p>
-              <button class="btn btn-primary btn-block" data-mode="login">Go to sign in</button></div></div>`;
-          $('.login-panel [data-mode]').addEventListener('click', () => { $('.login-panel').innerHTML = authCard('login'); wireAuthCard('login'); });
         }
       } catch (ex) {
-        if (ex.status === 409 && mode === 'setup') { $('.login-panel').innerHTML = authCard('login'); wireAuthCard('login'); toast(ex.message, 'err'); return; }
+        if (ex.status === 409 && mode === 'setup') { $('#auth-slot').innerHTML = authCard('login'); wireAuthCard('login'); toast(ex.message, 'err'); return; }
         showErr(ex.message, ex.data && ex.data.pending ? 'amber' : 'red');
         busy(btn, false);
       }
@@ -292,6 +289,7 @@
             <a class="brand" href="#/dashboard"><div class="logo-mark">34</div><div><div class="brand-name">34 Division</div><div class="brand-sub">Voter verification</div></div></a>
             <nav class="nav" id="side-nav"></nav>
             <div class="sidebar-foot">
+              ${langSwitch('block')}
               <a class="user-chip" href="#/account"><div class="avatar">${esc(initials(u.full_name))}</div>
                 <div class="who"><b>${esc(u.full_name)}</b><span>${esc(u.role)}</span></div></a>
             </div>
@@ -299,7 +297,8 @@
           <div class="main">
             <header class="topbar">
               <a class="brand" href="#/dashboard"><div class="logo-mark">34</div><div class="brand-name">34 Division</div></a>
-              <a class="avatar" href="#/account" aria-label="Account">${esc(initials(u.full_name))}</a>
+              <div style="display:flex;align-items:center;gap:10px">${langSwitch('sm')}
+              <a class="avatar" href="#/account" aria-label="Account">${esc(initials(u.full_name))}</a></div>
             </header>
             <main class="content" id="content"></main>
           </div>
@@ -329,17 +328,18 @@
   // ---------------------------------------------------------------- money check-box (per voter)
   // Renders the box for one voter. Shows who ticked it and when.
   function moneyControl(v) {
-    const canUntick = isAdmin();
+    const hist = `<button type="button" class="linkish money-hist" data-mlog="${v.id}" data-name="${esc(v.name)}" title="Money history">${icon('clock')}</button>`;
     if (v.money_given) {
       return `<div class="money-wrap" data-mwrap="${v.id}">
-        <button type="button" class="money-box on" data-money="${v.id}" data-given="true" data-name="${esc(v.name)}"
-          ${canUntick ? '' : 'aria-disabled="true"'} title="${canUntick ? 'Untick (admin)' : 'Money given'}">${icon('boxcheck')}<span>Money given</span></button>
+        <button type="button" class="money-box on" data-money="${v.id}" data-given="true" data-name="${esc(v.name)}" title="Tap to undo">${icon('boxcheck')}<span>Money given</span></button>
         <span class="money-by">by <b>${esc(v.money_by_name || '—')}</b> · ${esc(timeAgo(v.money_at))}</span>
-        <button type="button" class="linkish money-hist" data-mlog="${v.id}" data-name="${esc(v.name)}" title="Money history">${icon('clock')}</button>
+        <button type="button" class="money-undo" data-money="${v.id}" data-given="true" data-name="${esc(v.name)}">${icon('undo')}Undo</button>
+        ${hist}
       </div>`;
     }
     return `<div class="money-wrap" data-mwrap="${v.id}">
       <button type="button" class="money-box" data-money="${v.id}" data-given="false" data-name="${esc(v.name)}">${icon('box')}<span>Money</span></button>
+      ${v.money_logged ? hist : ''}
     </div>`;
   }
 
@@ -354,8 +354,8 @@
         title: 'Money history',
         sub: esc(hist.dataset.name),
         body: log.length ? `<ul class="rank-list" style="padding:0">${log.map((l) => `
-          <li style="padding:10px 0"><span class="name">${l.given ? '✅ Ticked' : '↩️ Unticked'} by <b>${esc(l.by_name || '—')}</b></span>
-          <span class="muted" style="font-size:13px">${esc(new Date(l.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}</span></li>`).join('')}</ul>`
+          <li style="padding:10px 0"><span class="name">${l.given ? '✅' : '↩️'} <span>${l.given ? 'Money given' : 'Undone'}</span> · <b>${esc(l.by_name || '—')}</b></span>
+          <span class="muted" style="font-size:13px">${esc(fmtDateTime(l.at))}</span></li>`).join('')}</ul>`
           : '<p class="muted">No changes yet.</p>',
         foot: '<button class="btn btn-primary" data-close>Close</button>',
       });
@@ -363,22 +363,21 @@
     }
     if (!box) return;
     const given = box.dataset.given === 'true';
-    if (given && !isAdmin()) { toast('Only the admin can untick money.', 'err'); return; }
     const m = openModal({
-      title: given ? 'Untick money?' : 'Mark money given?',
-      sub: given
-        ? `This removes the money tick for <b>${esc(box.dataset.name)}</b>. The change is kept in the history.`
-        : `For <b>${esc(box.dataset.name)}</b>. Your name (<b>${esc(state.user.full_name)}</b>) and the time will be recorded.`,
+      title: given ? 'Undo money given?' : 'Mark money given?',
+      sub: `<b>${esc(box.dataset.name)}</b><br><span>${given
+        ? 'The tick will be removed and can be given again later. Your name is recorded in the history.'
+        : 'Your name and the time will be recorded.'}</span>`,
       foot: `<button class="btn btn-ghost" data-close>Cancel</button>
-             <button class="btn ${given ? 'btn-danger' : 'btn-success'}" id="do-money">${icon(given ? 'x' : 'check')}${given ? 'Untick' : 'Yes, money given'}</button>`,
+             <button class="btn ${given ? 'btn-danger' : 'btn-success'}" id="do-money">${icon(given ? 'undo' : 'check')}${given ? 'Yes, undo' : 'Yes, money given'}</button>`,
     });
     $('#do-money', m).addEventListener('click', async (ev) => {
       busy(ev.currentTarget, true, 'Saving…');
       try {
         const { voter } = await api('POST', `/api/voters/${box.dataset.money}/money`, { given: !given });
         closeModal();
-        toast(given ? 'Money unticked' : `Money marked for ${voter.name}`);
-        $$(`[data-mwrap="${voter.id}"]`).forEach((w) => { w.outerHTML = moneyControl(voter); });
+        toast(given ? `Money tick undone for ${voter.name}` : `Money marked for ${voter.name}`);
+        $$(`[data-mwrap="${voter.id}"]`).forEach((w) => { w.outerHTML = moneyControl({ ...voter, money_logged: true }); });
         $$('[data-family-card]').forEach(updateFamilySummary);
       } catch (er) {
         fail(er);
@@ -471,7 +470,7 @@
     const maxDay = Math.max(1, ...s.daily.map((d) => d.n));
     const maxVol = Math.max(1, ...s.volunteers.map((v) => v.n));
     const maxSt = Math.max(1, ...s.top_streets.map((v) => v.voters));
-    const dayLabel = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' });
+    const dayLabel = (d) => new Date(d + 'T00:00:00').toLocaleDateString(LOCALE(), { weekday: 'short' });
 
     el.innerHTML = `
       <div class="page-head"><div><h1>${greet}, ${esc(state.user.full_name.split(' ')[0])}</h1><p>Here's how 34 Division is doing.</p></div>
@@ -681,7 +680,7 @@
           <p class="muted" style="margin:6px 0 12px">Serial ${esc(v.serial_no)} · ${esc(v.street)}</p>
           <a class="fam-chip lg" href="#/families?q=${fid(saved.family_id)}">${icon('family')}Family ${fid(saved.family_id)}</a>
           <p class="muted" style="margin:10px 0 0;font-size:13.5px">${saved.family_created
-            ? `New family created by <b>${esc(state.user.full_name)}</b>`
+            ? `<span>New family created by</span> <b>${esc(state.user.full_name)}</b>`
             : 'Added to an existing family'}</p></div>`,
         foot: `<button class="btn btn-ghost" id="s-new">${icon('plus')}New family</button>
                <button class="btn btn-brand" id="s-family">${icon('family')}Add family member</button>`,
@@ -979,7 +978,7 @@
       if (rj) {
         const m = openModal({
           title: 'Reject this sign-up?',
-          sub: `${esc(rj.dataset.name)} will not be able to sign in. They can sign up again later.`,
+          sub: `<b>${esc(rj.dataset.name)}</b><br><span>They will not be able to sign in.</span>`,
           foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-danger" id="do-rej">${icon('x')}Reject</button>`,
         });
         $('#do-rej', m).addEventListener('click', async (ev) => {
@@ -1156,9 +1155,13 @@
                 <div class="muted" style="font-size:13px">Opens full-screen from your home screen, like a normal app.</div></div>
             </div>
             <button class="btn btn-brand btn-block hidden" data-install style="margin-top:14px">${icon('download')}Install app</button>
-            <p class="muted" style="font-size:12.5px;margin:12px 0 0"><b>Android (Chrome):</b> tap ⋮ menu → <i>Add to Home screen</i> / <i>Install app</i>.<br/>
-              <b>iPhone (Safari):</b> tap the Share button → <i>Add to Home Screen</i>.</p>
+            <p class="muted" style="font-size:12.5px;margin:12px 0 0"><b>Android (Chrome):</b> <span>Tap the ⋮ menu, then “Add to Home screen” or “Install app”.</span><br/>
+              <b>iPhone (Safari):</b> <span>Tap the Share button, then “Add to Home Screen”.</span></p>
           </div>`}
+          <div class="card card-pad" style="display:flex;align-items:center;gap:14px;justify-content:space-between;flex-wrap:wrap">
+            <div><b>Language</b> <span class="muted" data-nt>· భాష</span><div class="muted" style="font-size:13px">Choose the language for this phone.</div></div>
+            ${langSwitch()}
+          </div>
           <div class="card"><div class="card-head"><h3>Menu</h3></div>
             <div class="nav" style="padding:8px">
               <a href="#/families">${icon('family')}<span>Families &amp; money</span></a>

@@ -14,7 +14,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Noto Sans Telugu: Google's screen-optimised Telugu face (full conjunct support,
+       weights 400–800). Served with unicode-range, so it only downloads when Telugu text is shown. -->
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+Telugu:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
@@ -23,6 +25,7 @@
   </div>
   <div id="toasts" class="toasts" role="status"></div>
   <div id="modal-root"></div>
+  <script src="/i18n.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
