@@ -148,8 +148,9 @@
   }
 
   // ---------------------------------------------------------------- login
-  function renderLogin() {
-    document.title = 'Sign in · 34 Division';
+  // mode: 'login' | 'signup' | 'setup' (first run, creates the admin)
+  function renderLogin(mode = 'login') {
+    document.title = `${mode === 'login' ? 'Sign in' : mode === 'setup' ? 'Set up' : 'Create account'} · 34 Division`;
     $('#app').innerHTML = `
       <div class="login-wrap">
         <section class="login-hero">
@@ -165,38 +166,110 @@
           </div>
           <div class="brand-sub">© ${new Date().getFullYear()} 34 Division</div>
         </section>
-        <section class="login-panel">
-          <form class="login-card" id="login-form" autocomplete="on">
-            <h2>Welcome back</h2>
-            <p class="muted">Sign in with the username your admin gave you.</p>
-            <div class="field"><label for="u">Username</label>
-              <input class="input" id="u" name="username" autocomplete="username" autocapitalize="none" required /></div>
-            <div class="field"><label for="p">Password</label>
-              <input class="input" id="p" name="password" type="password" autocomplete="current-password" required /></div>
-            <div id="login-err" class="banner banner-red hidden"></div>
-            <button class="btn btn-primary btn-block" type="submit">Sign in ${icon('arrow')}</button>
-          </form>
-        </section>
+        <section class="login-panel">${authCard(mode)}</section>
       </div>`;
-    $('#login-form').addEventListener('submit', async (e) => {
+    wireAuthCard(mode);
+  }
+
+  function authCard(mode) {
+    const userFields = `
+      <div class="field"><label for="fn">Full name</label>
+        <input class="input" id="fn" name="full_name" autocomplete="name" autocapitalize="words" required placeholder="e.g. Ravi Kumar" /></div>
+      <div class="field"><label for="mb">Mobile number <span class="muted" style="font-weight:500">(optional)</span></label>
+        <div class="input-group"><span class="prefix">+91</span>
+        <input class="input" id="mb" name="mobile" inputmode="numeric" maxlength="14" placeholder="98480 12345" /></div></div>
+      <div class="field"><label for="u">Choose a username</label>
+        <input class="input" id="u" name="username" autocomplete="username" autocapitalize="none" required placeholder="e.g. ravi" />
+        <span class="help">3–30 letters or numbers, no spaces. You'll use this to sign in.</span></div>
+      <div class="field"><label for="p">Choose a password</label>
+        <input class="input" id="p" name="password" type="password" autocomplete="new-password" minlength="6" required />
+        <span class="help">At least 6 characters.</span></div>
+      <div class="field"><label for="p2">Confirm password</label>
+        <input class="input" id="p2" name="password2" type="password" autocomplete="new-password" required /></div>`;
+
+    if (mode === 'setup') {
+      return `<form class="login-card" id="auth-form" autocomplete="on">
+        <span class="badge badge-ink" style="margin-bottom:14px">First-time setup</span>
+        <h2>Create the admin account</h2>
+        <p class="muted">This is the first sign-in for 34 Division. The account you create now will be the <b>admin</b>. You can add volunteers after this.</p>
+        ${userFields}
+        <div id="auth-err" class="banner banner-red hidden"></div>
+        <button class="btn btn-brand btn-block" type="submit">${icon('shield')}Create admin account</button>
+      </form>`;
+    }
+    if (mode === 'signup') {
+      return `<form class="login-card" id="auth-form" autocomplete="on">
+        <h2>Create your account</h2>
+        <p class="muted">Volunteers can sign up here. Your admin must approve your account before you can sign in.</p>
+        ${userFields}
+        <div id="auth-err" class="banner banner-red hidden"></div>
+        <button class="btn btn-primary btn-block" type="submit">Create account ${icon('arrow')}</button>
+        <p class="muted" style="text-align:center;margin:18px 0 0">Already have an account? <button type="button" class="linkish" data-mode="login" style="font-weight:700;color:var(--ink)">Sign in</button></p>
+      </form>`;
+    }
+    return `<form class="login-card" id="auth-form" autocomplete="on">
+      <h2>Welcome back</h2>
+      <p class="muted">Sign in to continue to 34 Division.</p>
+      <div class="field"><label for="u">Username</label>
+        <input class="input" id="u" name="username" autocomplete="username" autocapitalize="none" required /></div>
+      <div class="field"><label for="p">Password</label>
+        <input class="input" id="p" name="password" type="password" autocomplete="current-password" required /></div>
+      <div id="auth-err" class="banner banner-red hidden"></div>
+      <button class="btn btn-primary btn-block" type="submit">Sign in ${icon('arrow')}</button>
+      <p class="muted" style="text-align:center;margin:18px 0 0">New volunteer? <button type="button" class="linkish" data-mode="signup" style="font-weight:700;color:var(--ink)">Create an account</button></p>
+    </form>`;
+  }
+
+  function wireAuthCard(mode) {
+    const form = $('#auth-form');
+    const err = $('#auth-err');
+    const showErr = (msg, kind = 'red') => {
+      err.className = `banner banner-${kind}`;
+      err.innerHTML = `${icon(kind === 'green' ? 'check' : 'alert')}<span>${esc(msg)}</span>`;
+    };
+    form.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-mode]');
+      if (b) { $('.login-panel').innerHTML = authCard(b.dataset.mode); wireAuthCard(b.dataset.mode); }
+    });
+    const enter = async (user) => {
+      state.user = user;
+      if (!location.hash || location.hash === '#/') location.hash = '#/dashboard';
+      await router();
+      refreshPending();
+    };
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const btn = $('button[type=submit]', e.target);
-      const err = $('#login-err');
+      const btn = $('button[type=submit]', form);
       err.classList.add('hidden');
-      busy(btn, true, 'Signing in…');
+      const body = Object.fromEntries(new FormData(form));
+      if (mode !== 'login' && body.password !== body.password2) return showErr('The two passwords do not match.');
+      busy(btn, true, 'Please wait…');
       try {
-        const { user } = await api('POST', '/api/login', { username: $('#u').value, password: $('#p').value });
-        state.user = user;
-        if (!location.hash || location.hash === '#/') location.hash = '#/dashboard';
-        await router();
-        refreshPending();
+        if (mode === 'login') {
+          const { user } = await api('POST', '/api/login', { username: body.username, password: body.password });
+          await enter(user);
+        } else if (mode === 'setup') {
+          const { user } = await api('POST', '/api/setup', body);
+          toast('Admin account created. Welcome!');
+          await enter(user);
+        } else {
+          await api('POST', '/api/signup', body);
+          $('.login-panel').innerHTML = `
+            <div class="login-card"><div class="success-card" style="padding:0">
+              <div class="ico">${icon('check')}</div>
+              <h2 style="font-size:22px">Account created</h2>
+              <p class="muted" style="margin:8px 0 22px">Your username is <b>${esc(body.username.toLowerCase())}</b>. Ask your admin to approve your account. Then you can sign in.</p>
+              <button class="btn btn-primary btn-block" data-mode="login">Go to sign in</button></div></div>`;
+          $('.login-panel [data-mode]').addEventListener('click', () => { $('.login-panel').innerHTML = authCard('login'); wireAuthCard('login'); });
+        }
       } catch (ex) {
-        err.innerHTML = `${icon('alert')}${esc(ex.message)}`;
-        err.classList.remove('hidden');
+        if (ex.status === 409 && mode === 'setup') { $('.login-panel').innerHTML = authCard('login'); wireAuthCard('login'); toast(ex.message, 'err'); return; }
+        showErr(ex.message, ex.data && ex.data.pending ? 'amber' : 'red');
         busy(btn, false);
       }
     });
-    $('#u').focus();
+    const first = $('#fn') || $('#u');
+    if (first) first.focus();
   }
 
   // ---------------------------------------------------------------- shell
@@ -323,6 +396,7 @@
     el.innerHTML = `
       <div class="page-head"><div><h1>${greet}, ${esc(state.user.full_name.split(' ')[0])}</h1><p>Here's how 34 Division is doing.</p></div>
         <a class="btn btn-brand" href="#/add">${icon('plus')}Add voter</a></div>
+      ${s.pending_users ? `<div class="banner banner-green">${icon('users')}<span>${fmtNum(s.pending_users)} new volunteer${s.pending_users === 1 ? ' is' : 's are'} waiting for your approval.</span><a class="btn btn-sm btn-primary" href="#/team">Review sign-ups</a></div>` : ''}
       ${s.pending_review ? `<div class="banner banner-amber">${icon('inbox')}<span>${fmtNum(s.pending_review)} uploaded ${s.pending_review === 1 ? 'entry needs' : 'entries need'} a duplicate review.</span><a class="btn btn-sm btn-primary" href="#/review">Review now</a></div>` : ''}
       <div class="grid grid-4">
         <div class="card stat feature"><div class="label"><span class="ico">${icon('shield')}</span>Verified voters</div>
@@ -671,7 +745,8 @@
   async function viewTeam(el) {
     const genPw = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
     el.innerHTML = `
-      <div class="page-head"><div><h1>Volunteers</h1><p>Create logins for your team. Every verification is recorded under the volunteer's name.</p></div></div>
+      <div class="page-head"><div><h1>Volunteers</h1><p>Approve sign-ups or create logins for your team. Every verification is recorded under the volunteer's name.</p></div></div>
+      <div id="t-pending"></div>
       <div class="grid grid-form">
         <div class="card"><div class="card-head"><h3>Team</h3></div><div class="table-wrap" id="t-list"><div class="card-pad"><div class="skeleton" style="height:160px"></div></div></div></div>
         <form class="card card-pad" id="t-form" autocomplete="off">
@@ -685,7 +760,24 @@
         </form>
       </div>`;
     async function load() {
-      const users = await api('GET', '/api/users');
+      const all = await api('GET', '/api/users');
+      const pending = all.filter((u) => !u.approved);
+      const users = all.filter((u) => u.approved);
+      $('#t-pending').innerHTML = pending.length ? `
+        <div class="card" style="margin-bottom:20px">
+          <div class="card-head"><h3>Waiting for approval</h3><span class="badge badge-amber">${pending.length}</span></div>
+          ${pending.map((u) => `
+            <div class="voter-row">
+              <div class="avatar">${esc(initials(u.full_name))}</div>
+              <div class="body"><div class="top"><span class="vname">${esc(u.full_name)}</span><span class="badge badge-amber">Pending</span></div>
+                <div class="meta"><span>${icon('user')}@${esc(u.username)}</span>${u.mobile ? `<span>${icon('phone')}${esc(fmtMobile(u.mobile))}</span>` : ''}</div>
+                <div class="by">Signed up ${esc(timeAgo(u.created_at))}</div></div>
+              <div class="actions">
+                <button class="btn btn-sm btn-ghost" data-reject="${u.id}" data-name="${esc(u.full_name)}">${icon('x')}Reject</button>
+                <button class="btn btn-sm btn-success" data-approve="${u.id}">${icon('check')}Approve</button>
+              </div>
+            </div>`).join('')}
+        </div>` : '';
       $('#t-list').innerHTML = `<table class="table"><thead><tr><th>Name</th><th>Verified</th><th>Status</th><th></th></tr></thead><tbody>
         ${users.map((u) => `<tr>
           <td><div style="display:flex;gap:10px;align-items:center"><div class="avatar">${esc(initials(u.full_name))}</div>
@@ -718,6 +810,28 @@
         load().catch(fail);
       } catch (er) { fail(er); }
       busy(btn, false);
+    });
+    $('#t-pending').addEventListener('click', async (e) => {
+      const ap = e.target.closest('[data-approve]');
+      const rj = e.target.closest('[data-reject]');
+      if (ap) {
+        busy(ap, true, 'Approving…');
+        try { await api('PATCH', `/api/users/${ap.dataset.approve}`, { approved: true }); toast('Volunteer approved. They can sign in now.'); }
+        catch (er) { fail(er); }
+        load().catch(fail);
+      }
+      if (rj) {
+        const m = openModal({
+          title: 'Reject this sign-up?',
+          sub: `${esc(rj.dataset.name)} will not be able to sign in. They can sign up again later.`,
+          foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-danger" id="do-rej">${icon('x')}Reject</button>`,
+        });
+        $('#do-rej', m).addEventListener('click', async (ev) => {
+          busy(ev.currentTarget, true, 'Rejecting…');
+          try { await api('DELETE', `/api/users/${rj.dataset.reject}`); closeModal(); toast('Sign-up rejected'); load().catch(fail); }
+          catch (er) { fail(er); busy(ev.currentTarget, false); }
+        });
+      }
     });
     $('#t-list').addEventListener('click', async (e) => {
       const tg = e.target.closest('[data-toggle]');
@@ -918,7 +1032,10 @@
       await router();
       refreshPending();
     } catch (e) {
-      if (!e.silent) renderLogin();
+      // Not signed in: first run shows the admin setup screen, otherwise sign-in.
+      let mode = 'login';
+      try { if ((await api('GET', '/api/setup-status')).needs_setup) mode = 'setup'; } catch { /* fall back to login */ }
+      renderLogin(mode);
     }
   })();
 })();

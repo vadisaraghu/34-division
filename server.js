@@ -75,7 +75,7 @@ async function auth(req, res, next) {
     if (!token) return res.status(401).json({ error: 'Please sign in.' });
     const { rows } = await pool.query(
       `SELECT u.id, u.username, u.full_name, u.role FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token_hash = $1 AND s.expires_at > now() AND u.active`,
+       WHERE s.token_hash = $1 AND s.expires_at > now() AND u.active AND u.approved`,
       [sha256(token)]
     );
     if (!rows[0]) return res.status(401).json({ error: 'Session expired. Please sign in again.' });
@@ -114,14 +114,89 @@ app.post('/api/login', wrap(async (req, res) => {
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: 'Wrong username or password.' });
   }
+  if (!user.approved) {
+    return res.status(403).json({ error: 'Your account is waiting for admin approval. Please ask your admin to approve it.', pending: true });
+  }
+  await startSession(res, user.id);
+  res.json({ user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role } });
+}));
+
+async function startSession(res, userId) {
   const token = crypto.randomBytes(32).toString('base64url');
   await pool.query(
     `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + interval '${SESSION_DAYS} days')`,
-    [sha256(token), user.id]
+    [sha256(token), userId]
   );
   await pool.query('DELETE FROM sessions WHERE expires_at < now()');
   setSessionCookie(res, token, SESSION_DAYS * 86400);
-  res.json({ user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role } });
+}
+
+// Shared validation for the setup, sign-up and admin "add volunteer" forms.
+function validateNewUser(body) {
+  const username = clean(body.username).toLowerCase();
+  const full_name = clean(body.full_name);
+  const password = String(body.password ?? '');
+  const mobile = normMobile(body.mobile);
+  if (full_name.length < 2) return { error: 'Enter your full name.' };
+  if (!/^[a-z0-9._-]{3,30}$/.test(username)) return { error: 'Username: 3-30 letters/numbers, no spaces.' };
+  if (password.length < 6) return { error: 'Password must be at least 6 characters.' };
+  if (body.mobile && !/^[6-9]\d{9}$/.test(mobile)) return { error: 'Enter a valid 10-digit mobile number.' };
+  return { value: { username, full_name, password, mobile } };
+}
+
+// ---------- first-time setup & volunteer sign-up ----------
+app.get('/api/setup-status', wrap(async (req, res) => {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM users');
+  res.json({ needs_setup: rows[0].n === 0 });
+}));
+
+// Creates the very first account (the admin). Only works while there are no users.
+app.post('/api/setup', wrap(async (req, res) => {
+  const { value: u, error } = validateNewUser(req.body);
+  if (error) return res.status(400).json({ error });
+  const client = await pool.connect();
+  let id;
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(35)');
+    const { rows } = await client.query('SELECT count(*)::int AS n FROM users');
+    if (rows[0].n > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Setup is already complete. Please sign in.' });
+    }
+    const r = await client.query(
+      "INSERT INTO users (username, full_name, password_hash, mobile, role, approved) VALUES ($1,$2,$3,$4,'admin',TRUE) RETURNING id",
+      [u.username, u.full_name, await bcrypt.hash(u.password, 10), u.mobile]
+    );
+    id = r.rows[0].id;
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  await startSession(res, id);
+  res.status(201).json({ user: { id, username: u.username, full_name: u.full_name, role: 'admin' } });
+}));
+
+// Volunteer self-registration: account stays locked until an admin approves it.
+app.post('/api/signup', wrap(async (req, res) => {
+  if (tooManyAttempts('signup|' + req.ip)) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  const { value: u, error } = validateNewUser(req.body);
+  if (error) return res.status(400).json({ error });
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM users');
+  if (rows[0].n === 0) return res.status(409).json({ error: 'The admin account has not been set up yet.' });
+  try {
+    await pool.query(
+      "INSERT INTO users (username, full_name, password_hash, mobile, role, approved) VALUES ($1,$2,$3,$4,'volunteer',FALSE)",
+      [u.username, u.full_name, await bcrypt.hash(u.password, 10), u.mobile]
+    );
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'That username is taken. Try another one.' });
+    throw e;
+  }
+  res.status(201).json({ ok: true });
 }));
 
 app.post('/api/logout', wrap(async (req, res) => {
@@ -165,10 +240,14 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
     pool.query(`${SELECT_VOTER} ORDER BY v.verified_at DESC LIMIT 6`),
     pool.query('SELECT count(*)::int AS n FROM review_queue'),
   ]);
+  const pendingUsers = req.user.role === 'admin'
+    ? (await pool.query('SELECT count(*)::int AS n FROM users WHERE NOT approved')).rows[0].n
+    : 0;
   res.json({
     ...totals.rows[0],
     today: today.rows[0].n,
     pending_review: pending.rows[0].n,
+    pending_users: pendingUsers,
     top_streets: streets.rows,
     volunteers: volunteers.rows,
     daily: daily.rows,
@@ -398,24 +477,20 @@ app.get('/api/export.csv', auth, adminOnly, wrap(async (req, res) => {
 // ---------- volunteers (admin) ----------
 app.get('/api/users', auth, adminOnly, wrap(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT u.id, u.username, u.full_name, u.role, u.active, u.created_at,
+    `SELECT u.id, u.username, u.full_name, u.mobile, u.role, u.active, u.approved, u.created_at,
             (SELECT count(*)::int FROM voters v WHERE v.verified_by = u.id) AS verified
-     FROM users u ORDER BY u.role, u.full_name`
+     FROM users u ORDER BY u.approved, u.role, u.full_name`
   );
   res.json(rows);
 }));
 
 app.post('/api/users', auth, adminOnly, wrap(async (req, res) => {
-  const username = clean(req.body.username).toLowerCase();
-  const full_name = clean(req.body.full_name);
-  const password = String(req.body.password ?? '');
+  const { value: u, error } = validateNewUser(req.body);
+  if (error) return res.status(400).json({ error });
   const role = req.body.role === 'admin' ? 'admin' : 'volunteer';
-  if (!/^[a-z0-9._-]{3,30}$/.test(username)) return res.status(400).json({ error: 'Username: 3-30 letters/numbers, no spaces.' });
-  if (full_name.length < 2) return res.status(400).json({ error: 'Enter the full name.' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   try {
-    await pool.query('INSERT INTO users (username, full_name, password_hash, role) VALUES ($1,$2,$3,$4)', [
-      username, full_name, await bcrypt.hash(password, 10), role,
+    await pool.query('INSERT INTO users (username, full_name, password_hash, mobile, role) VALUES ($1,$2,$3,$4,$5)', [
+      u.username, u.full_name, await bcrypt.hash(u.password, 10), u.mobile, role,
     ]);
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'That username is taken.' });
@@ -427,6 +502,9 @@ app.post('/api/users', auth, adminOnly, wrap(async (req, res) => {
 app.patch('/api/users/:id', auth, adminOnly, wrap(async (req, res) => {
   const id = Number(req.params.id);
   if (id === req.user.id && req.body.active === false) return res.status(400).json({ error: "You can't disable yourself." });
+  if (req.body.approved === true) {
+    await pool.query('UPDATE users SET approved = TRUE, active = TRUE WHERE id = $1', [id]);
+  }
   if (typeof req.body.active === 'boolean') {
     await pool.query('UPDATE users SET active = $1 WHERE id = $2', [req.body.active, id]);
     if (!req.body.active) await pool.query('DELETE FROM sessions WHERE user_id = $1', [id]);
@@ -436,6 +514,13 @@ app.patch('/api/users/:id', auth, adminOnly, wrap(async (req, res) => {
     await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await bcrypt.hash(String(req.body.password), 10), id]);
     await pool.query('DELETE FROM sessions WHERE user_id = $1', [id]);
   }
+  res.json({ ok: true });
+}));
+
+// Reject a pending sign-up (only unapproved accounts can be deleted).
+app.delete('/api/users/:id', auth, adminOnly, wrap(async (req, res) => {
+  const r = await pool.query('DELETE FROM users WHERE id = $1 AND NOT approved', [Number(req.params.id)]);
+  if (!r.rowCount) return res.status(400).json({ error: 'Only pending sign-ups can be rejected. Disable active users instead.' });
   res.json({ ok: true });
 }));
 
@@ -454,24 +539,10 @@ app.use((err, req, res, next) => {
 });
 
 // ---------- start ----------
-async function bootstrapAdmin() {
-  const { rows } = await pool.query('SELECT count(*)::int AS n FROM users');
-  if (rows[0].n > 0) return;
-  const username = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
-  const password = process.env.ADMIN_PASSWORD;
-  if (!password) {
-    console.warn('No users exist and ADMIN_PASSWORD is not set - set it to create the first admin.');
-    return;
-  }
-  await pool.query("INSERT INTO users (username, full_name, password_hash, role) VALUES ($1, $2, $3, 'admin')", [
-    username, process.env.ADMIN_NAME || 'Admin', await bcrypt.hash(password, 10),
-  ]);
-  console.log(`Created admin user "${username}".`);
-}
-
+// No users are created automatically: the first visitor creates the admin
+// account on the setup screen (/api/setup).
 (async () => {
   await migrate();
-  await bootstrapAdmin();
   app.listen(PORT, () => console.log(`34 Division running on http://localhost:${PORT}`));
 })().catch((e) => {
   console.error('Failed to start:', e);

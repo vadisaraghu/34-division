@@ -19,21 +19,28 @@ mobile and street**. Names are compared order-independently and fuzzily
 Bulk uploads (admin, Excel/CSV) follow the same rules: exact duplicates are skipped,
 look-alikes go to the **Review queue** for a volunteer to accept or discard.
 
+## Accounts
+
+- **First run:** when the database has no users, the site shows a *Create the admin account*
+  screen. Whoever completes it becomes the admin. Nobody else can use that screen afterwards.
+- **Volunteer sign-up:** volunteers can create their own account from the login page. It stays
+  locked until the admin approves it (Volunteers page, or the banner on the dashboard).
+- The admin can also create volunteer logins directly.
+
 ## Roles
 
-- **Admin**: everything, plus upload list, manage volunteers, edit/delete voters, export CSV.
+- **Admin**: everything, plus upload list, approve/manage volunteers, edit/delete voters, export CSV.
 - **Volunteer**: add voters, search, review queue.
 
 ## Run locally
 
 ```bash
-cp .env.example .env   # fill in DATABASE_URL and ADMIN_PASSWORD
+cp .env.example .env   # fill in DATABASE_URL
 npm install
 npm start              # http://localhost:3000
 ```
 
-The database schema is created automatically on start. If no users exist, an admin is
-created from `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
+The database schema is created automatically on start.
 
 ## Hosting (free)
 
@@ -41,4 +48,4 @@ created from `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
   first visit after that takes ~30-60 s to wake up.
 - **Database**: Neon free Postgres (Render's free Postgres is deleted after 30 days).
 
-Environment variables on Render: `DATABASE_URL`, `ADMIN_PASSWORD`, `NODE_ENV=production`.
+Environment variables on Render: `DATABASE_URL`, `NODE_ENV=production`.
