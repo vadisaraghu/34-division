@@ -102,9 +102,21 @@
   const fail = (e) => { if (!e.silent) toast(e.message, 'err'); };
 
   function busy(btn, on, label) {
-    if (!btn) return;
-    if (on) { btn.dataset.label = btn.innerHTML; btn.innerHTML = `<span class="spin"></span>${esc(label || 'Please wait…')}`; btn.disabled = true; }
-    else { btn.innerHTML = btn.dataset.label || btn.innerHTML; btn.disabled = false; }
+    // After an await, event.currentTarget is null: restore whichever buttons are still busy.
+    if (!btn) {
+      if (!on) $$('[data-busy]').forEach((b) => busy(b, false));
+      return;
+    }
+    if (on) {
+      if (!btn.hasAttribute('data-busy')) btn.dataset.label = btn.innerHTML;
+      btn.setAttribute('data-busy', '');
+      btn.innerHTML = `<span class="spin"></span>${esc(label || 'Please wait…')}`;
+      btn.disabled = true;
+    } else {
+      if (btn.hasAttribute('data-busy')) btn.innerHTML = btn.dataset.label || btn.innerHTML;
+      btn.removeAttribute('data-busy');
+      btn.disabled = false;
+    }
   }
 
   // ---------------------------------------------------------------- modal
@@ -329,28 +341,124 @@
       ${tab('account', 'more', 'More', `<span class="dot ${state.pending ? '' : 'hidden'}" data-pending>${state.pending}</span>`)}`;
   }
 
-  // ---------------------------------------------------------------- money check-box (per voter)
-  // Renders the box for one voter. Shows who ticked it and when.
+  // ---------------------------------------------------------------- money (per voter, and per family)
+  // Renders the box for one voter. Shows who received the money, who ticked it and when.
   function moneyControl(v) {
+    const attrs = `data-money="${v.id}" data-name="${esc(v.name)}" data-mobile="${esc(v.mobile || '')}"`;
     const hist = `<button type="button" class="linkish money-hist" data-mlog="${v.id}" data-name="${esc(v.name)}" title="Money history">${icon('clock')}</button>`;
     if (v.money_given) {
       return `<div class="money-wrap" data-mwrap="${v.id}">
-        <button type="button" class="money-box on" data-money="${v.id}" data-given="true" data-name="${esc(v.name)}" title="Tap to undo">${icon('boxcheck')}<span>Money given</span></button>
-        <span class="money-by">by <b>${esc(v.money_by_name || '—')}</b> · ${esc(timeAgo(v.money_at))}</span>
-        <button type="button" class="money-undo" data-money="${v.id}" data-given="true" data-name="${esc(v.name)}">${icon('undo')}Undo</button>
+        <button type="button" class="money-box on" ${attrs} data-given="true" title="Tap to undo">${icon('boxcheck')}<span>Money given</span></button>
+        <span class="money-by">${v.money_received_by ? `<span class="recv">${icon('user')}<span>Received by</span> <b data-nt>${esc(v.money_received_by)}</b></span>` : ''}
+          <span class="tick"><span>by</span> <b>${esc(v.money_by_name || '—')}</b> · ${esc(timeAgo(v.money_at))}</span></span>
+        <button type="button" class="money-undo" ${attrs} data-given="true">${icon('undo')}Undo</button>
         ${hist}
       </div>`;
     }
     return `<div class="money-wrap" data-mwrap="${v.id}">
-      <button type="button" class="money-box" data-money="${v.id}" data-given="false" data-name="${esc(v.name)}">${icon('box')}<span>Money</span></button>
+      <button type="button" class="money-box" ${attrs} data-given="false">${icon('box')}<span>Money</span></button>
       ${v.money_logged ? hist : ''}
     </div>`;
+  }
+
+  // Re-draws every money box (and family summary) for voters that changed.
+  function refreshMoney(voters) {
+    voters.forEach((v) => $$(`[data-mwrap="${v.id}"]`).forEach((w) => { w.outerHTML = moneyControl({ ...v, money_logged: true }); }));
+    $$('[data-family-card]').forEach(updateFamilySummary);
+  }
+
+  // The money dialog. Lists the family's members (looked up live by mobile number):
+  //   - "Money for": who the money is being marked for. Opened from one voter, that
+  //     voter is ticked; other members still waiting can be added. Opened from a
+  //     family card, every waiting member is ticked.
+  //   - "Received by": which family member (or someone else, typed in) took the money.
+  async function moneyDialog({ voterId = null, name = '', mobile = '', familyId = null }) {
+    let fam = null;
+    try { fam = mobile ? (await api('GET', `/api/families/lookup?mobile=${encodeURIComponent(mobile)}`)).family : null; } catch (e) { fail(e); return; }
+    const members = fam ? fam.members : [{ id: voterId, name, money_given: false, money_received_by: '' }];
+    const pending = members.filter((x) => !x.money_given);
+    if (!pending.length) { toast('Money is already marked for everyone in this family.'); return; }
+    const pre = voterId ? [voterId] : pending.map((x) => x.id);
+    const firstRecv = (members.find((x) => x.id === voterId) || pending[0]).id;
+    const m = openModal({
+      title: 'Mark money given',
+      sub: fam ? `<span class="fam-chip">${icon('family')}${fid(fam.id)}</span> <span>${esc(fmtMobile(fam.mobile))}</span> · <span data-nt>${esc(fam.street || '')}</span>` : esc(name),
+      wide: true,
+      body: `
+        <div class="md-section">
+          <div class="md-cap"><span class="step">1</span>Money for <span class="muted" id="md-count"></span></div>
+          <div class="pick-list">
+            ${members.map((x) => `
+              <label class="pick ${x.money_given ? 'done' : ''}">
+                <input type="checkbox" name="for" value="${x.id}" ${x.money_given ? 'disabled checked' : pre.includes(x.id) ? 'checked' : ''} />
+                <span class="pick-body"><b data-nt>${esc(x.name)}</b>${x.name_te ? `<span class="te" lang="te" data-nt>${esc(x.name_te)}</span>` : ''}
+                  <small>${x.money_given ? `${icon('check')}<span>Already given</span>${x.money_received_by ? ` · <span>received by</span> <span data-nt>${esc(x.money_received_by)}</span>` : ''}` : x.serial_no ? `# <span data-nt>${esc(x.serial_no)}</span>` : ''}</small></span>
+              </label>`).join('')}
+          </div>
+          ${pending.length > 1 ? `<button type="button" class="linkish" id="md-all" style="margin-top:8px">Select everyone still waiting</button>` : ''}
+        </div>
+        <div class="md-section">
+          <div class="md-cap"><span class="step">2</span>Who received the money?</div>
+          <div class="recv-list">
+            ${members.map((x) => `
+              <label class="recv-opt"><input type="radio" name="recv" value="${esc(x.name)}" ${x.id === firstRecv ? 'checked' : ''} />
+                <span class="avatar">${esc(initials(x.name))}</span><span data-nt>${esc(x.name)}</span></label>`).join('')}
+            <label class="recv-opt other"><input type="radio" name="recv" value="__other" /><span class="avatar">${icon('plus')}</span><span>Someone else</span></label>
+          </div>
+          <input class="input hidden" id="md-other" maxlength="120" placeholder="Name of the person who received it" style="margin-top:10px" />
+        </div>
+        <div class="md-summary" id="md-summary"></div>`,
+      foot: `<button class="btn btn-ghost" data-close>Cancel</button>
+             <button class="btn btn-success" id="do-money">${icon('check')}<span>Yes, money given</span></button>`,
+    });
+    const forBoxes = () => $$('input[name="for"]:not(:disabled)', m);
+    const recvName = () => {
+      const r = $('input[name="recv"]:checked', m);
+      if (!r) return '';
+      return r.value === '__other' ? $('#md-other', m).value.trim() : r.value;
+    };
+    const update = () => {
+      const chosen = forBoxes().filter((b) => b.checked);
+      const names = chosen.map((b) => b.closest('.pick').querySelector('b').textContent);
+      const r = recvName();
+      $('#md-other', m).classList.toggle('hidden', !($('input[name="recv"]:checked', m) || {}).value || $('input[name="recv"]:checked', m).value !== '__other');
+      $('#md-count', m).textContent = `(${chosen.length} of ${forBoxes().length})`;
+      $('#md-summary', m).innerHTML = chosen.length
+        ? `${icon('rupee')}<span>Money for <b data-nt>${esc(names.join(', '))}</b>, received by <b data-nt>${esc(r || '…')}</b>.</span>`
+        : `${icon('alert')}<span>Choose at least one person.</span>`;
+      $('#md-summary', m).className = `md-summary ${chosen.length && r ? 'ok' : 'warn'}`;
+      $('#do-money', m).disabled = !chosen.length || !r;
+    };
+    m.addEventListener('change', update);
+    $('#md-other', m).addEventListener('input', update);
+    if ($('#md-all', m)) $('#md-all', m).addEventListener('click', () => { forBoxes().forEach((b) => { b.checked = true; }); update(); });
+    update();
+    $('#do-money', m).addEventListener('click', async (ev) => {
+      const ids = forBoxes().filter((b) => b.checked).map((b) => Number(b.value));
+      busy(ev.currentTarget, true, 'Saving…');
+      try {
+        const r = fam && !ids.includes(voterId)
+          ? await api('POST', `/api/families/${fam.id}/money`, { voter_ids: ids, received_by: recvName() })
+          : await api('POST', `/api/voters/${voterId || ids[0]}/money`, {
+            given: true, received_by: recvName(), also_ids: ids.filter((x) => x !== (voterId || ids[0])),
+          });
+        closeModal();
+        toast(ids.length > 1 ? `Money marked for ${ids.length} people` : `Money marked for ${r.voters[0].name}`);
+        refreshMoney(r.voters);
+      } catch (er) {
+        fail(er);
+        busy(ev.currentTarget, false);
+        if (er.status === 409) { closeModal(); router(); }
+      }
+    });
   }
 
   // One delegated handler for every money box on any page.
   document.addEventListener('click', async (e) => {
     const box = e.target.closest('[data-money]');
     const hist = e.target.closest('[data-mlog]');
+    const famMoney = e.target.closest('[data-fam-money]');
+    if (famMoney) { moneyDialog({ mobile: famMoney.dataset.mobile, familyId: Number(famMoney.dataset.famMoney) }); return; }
     if (hist) {
       const log = await api('GET', `/api/voters/${hist.dataset.mlog}/money-log`).catch(fail);
       if (!log) return;
@@ -358,7 +466,8 @@
         title: 'Money history',
         sub: esc(hist.dataset.name),
         body: log.length ? `<ul class="rank-list" style="padding:0">${log.map((l) => `
-          <li style="padding:10px 0"><span class="name">${l.given ? '✅' : '↩️'} <span>${l.given ? 'Money given' : 'Undone'}</span> · <b>${esc(l.by_name || '—')}</b></span>
+          <li style="padding:10px 0"><span class="name">${l.given ? '✅' : '↩️'} <span>${l.given ? 'Money given' : 'Undone'}</span> · <b>${esc(l.by_name || '—')}</b>
+            ${l.given && l.received_by ? `<br><small class="muted"><span>Received by</span> <span data-nt>${esc(l.received_by)}</span></small>` : ''}</span>
           <span class="muted" style="font-size:13px">${esc(fmtDateTime(l.at))}</span></li>`).join('')}</ul>`
           : '<p class="muted">No changes yet.</p>',
         foot: '<button class="btn btn-primary" data-close>Close</button>',
@@ -366,23 +475,26 @@
       return;
     }
     if (!box) return;
-    const given = box.dataset.given === 'true';
+    if (box.dataset.given !== 'true') {
+      moneyDialog({ voterId: Number(box.dataset.money), name: box.dataset.name, mobile: box.dataset.mobile });
+      return;
+    }
+    const wrap = box.closest('.money-wrap');
+    const recv = wrap && wrap.querySelector('.recv b') ? wrap.querySelector('.recv b').textContent : '';
     const m = openModal({
-      title: given ? 'Undo money given?' : 'Mark money given?',
-      sub: `<b>${esc(box.dataset.name)}</b><br><span>${given
-        ? 'The tick will be removed and can be given again later. Your name is recorded in the history.'
-        : 'Your name and the time will be recorded.'}</span>`,
+      title: 'Undo money given?',
+      sub: `<b>${esc(box.dataset.name)}</b>${recv ? `<br><span>Received by</span> <b data-nt>${esc(recv)}</b>` : ''}<br>
+        <span>The tick will be removed and can be given again later. Your name is recorded in the history.</span>`,
       foot: `<button class="btn btn-ghost" data-close>Cancel</button>
-             <button class="btn ${given ? 'btn-danger' : 'btn-success'}" id="do-money">${icon(given ? 'undo' : 'check')}${given ? 'Yes, undo' : 'Yes, money given'}</button>`,
+             <button class="btn btn-danger" id="do-money">${icon('undo')}Yes, undo</button>`,
     });
     $('#do-money', m).addEventListener('click', async (ev) => {
       busy(ev.currentTarget, true, 'Saving…');
       try {
-        const { voter } = await api('POST', `/api/voters/${box.dataset.money}/money`, { given: !given });
+        const { voter } = await api('POST', `/api/voters/${box.dataset.money}/money`, { given: false });
         closeModal();
-        toast(given ? `Money tick undone for ${voter.name}` : `Money marked for ${voter.name}`);
-        $$(`[data-mwrap="${voter.id}"]`).forEach((w) => { w.outerHTML = moneyControl({ ...voter, money_logged: true }); });
-        $$('[data-family-card]').forEach(updateFamilySummary);
+        toast(`Money tick undone for ${voter.name}`);
+        refreshMoney([voter]);
       } catch (er) {
         fail(er);
         busy(ev.currentTarget, false);
@@ -423,6 +535,9 @@
     if (!b) return;
     b.className = `badge money-sum ${done === total ? 'badge-green' : done ? 'badge-amber' : 'badge-gray'}`;
     b.innerHTML = `${icon('rupee')}${done}/${total} money`;
+    // "Give money" for the family only while someone is still waiting.
+    const give = $('.fam-money-btn', card);
+    if (give) give.classList.toggle('hidden', done === total);
   }
 
   // ---------------------------------------------------------------- shared renderers
@@ -659,7 +774,8 @@
           <div class="field"><label for="f-mobile">Family mobile number</label>
             <div class="input-group"><span class="prefix">+91</span>
               <input class="input" id="f-mobile" name="mobile" placeholder="98480 12345" required inputmode="numeric" maxlength="14" value="${esc(pre.mobile)}" /></div>
-            <span class="help">One number for the whole family.</span></div>
+            <span class="help">One number for the whole family. A number already used by a family can only be used to add members to that family.</span></div>
+          <div id="fam-box" class="hidden" aria-live="polite"></div>
           <div class="field"><label for="f-street">Street name</label>
             <input class="input" id="f-street" name="street" list="street-list" placeholder="Start typing to pick a street" required maxlength="120" value="${esc(pre.street)}" />
             <datalist id="street-list"></datalist></div>
@@ -687,6 +803,46 @@
       door_no: form.door_no.value.trim(),
       double_vote: form.double_vote.checked,
       double_vote_note: form.double_vote.checked ? form.double_vote_note.value.trim() : '',
+      join_family: !!joined && joined === form.mobile.value.replace(/\D/g, '').slice(-10),
+    });
+
+    // ---- one mobile number = one family
+    let mobileFamily = null; // family that already owns the typed mobile number
+    let joined = pre.mobile ? pre.mobile.replace(/\D/g, '').slice(-10) : ''; // mobile of the family the volunteer chose to join
+    const famBox = $('#fam-box');
+    function renderFamBox() {
+      const mob = form.mobile.value.replace(/\D/g, '').slice(-10);
+      if (!mobileFamily || mobileFamily.mobile !== mob) { famBox.className = 'hidden'; famBox.innerHTML = ''; return; }
+      const f = mobileFamily;
+      if (joined === mob) {
+        famBox.className = 'fam-box joined';
+        famBox.innerHTML = familyBox(f, `Adding to family ${fid(f.id)}`,
+          `This voter will join the ${f.member_count} member${f.member_count === 1 ? '' : 's'} already in this family.`,
+          '<button type="button" class="btn btn-sm btn-ghost" data-fam-act="other">Use a different number</button>');
+      } else {
+        famBox.className = 'fam-box taken';
+        famBox.innerHTML = familyBox(f, 'This mobile number already belongs to a family',
+          'One mobile number = one family. Add this voter to that family, or enter a different number for a new family.',
+          `<button type="button" class="btn btn-sm btn-success" data-fam-act="join">${icon('family')}Add to family ${fid(f.id)}</button>
+           <button type="button" class="btn btn-sm btn-ghost" data-fam-act="other">Use a different number</button>`);
+      }
+    }
+    famBox.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-fam-act]');
+      if (!b) return;
+      if (b.dataset.famAct === 'join') {
+        joined = mobileFamily.mobile;
+        if (!form.street.value.trim() && mobileFamily.street) form.street.value = mobileFamily.street;
+        if (mobileFamily.family_votes) form.family_votes.value = mobileFamily.family_votes;
+        form.mobile.classList.remove('invalid');
+        $('#form-err').classList.add('hidden');
+      } else {
+        joined = '';
+        form.mobile.value = '';
+        mobileFamily = null;
+        form.mobile.focus();
+      }
+      renderFamBox();
     });
 
     function setPanel(kind, title, text, matches = [], family = [], roll = null) {
@@ -720,6 +876,7 @@
       const v = values();
       if (v.name.length < 3 && !v.serial_no && v.mobile.length < 10) {
         setPanel('idle', 'Duplicate check', 'Start typing the name, serial number or mobile. Matching voters will appear here.');
+        mobileFamily = null; renderFamBox();
         return;
       }
       const my = ++seq;
@@ -727,6 +884,8 @@
       try {
         const r = await api('POST', '/api/voters/check', v);
         if (my !== seq) return;
+        mobileFamily = r.mobile_family || null;
+        renderFamBox();
         const fam = r.family || [];
         if (r.level === 'exact') setPanel('block', 'Already verified', 'This voter is already in the list and can’t be entered again.', r.matches, fam, r.roll);
         else if (r.matches.length) setPanel('warn', `${r.matches.length} possible match${r.matches.length > 1 ? 'es' : ''}`, 'Check that this is a different person before saving. Highlighted fields match.', r.matches, fam, r.roll);
@@ -901,6 +1060,9 @@
       if (v.name.length < 2) errs.push(['name', 'Enter the voter name.']);
       if (!v.serial_no) errs.push(['serial_no', 'Enter the serial number.']);
       if (!/^[6-9]\d{9}$/.test(v.mobile)) errs.push(['mobile', 'Enter a valid 10-digit mobile number.']);
+      else if (mobileFamily && mobileFamily.mobile === v.mobile && !v.join_family) {
+        errs.push(['mobile', `This mobile number already belongs to family ${fid(mobileFamily.id)}. Tap “Add to family” or use a different number.`]);
+      }
       if (!v.street) errs.push(['street', 'Enter the street name.']);
       if (!(v.family_votes >= 1 && v.family_votes <= 99)) errs.push(['family_votes', 'Family votes must be 1–99.']);
       errs.forEach(([n]) => form[n].classList.add('invalid'));
@@ -918,7 +1080,15 @@
         closeModal();
         showSaved(v, saved);
       } catch (e) {
-        if (e.status === 409 && e.data.level === 'exact') {
+        if (e.status === 409 && e.data.family_taken) {
+          closeModal();
+          mobileFamily = e.data.family;
+          joined = '';
+          renderFamBox();
+          form.mobile.classList.add('invalid');
+          const fe = $('#form-err'); fe.innerHTML = `${icon('alert')}${esc(e.message)}`; fe.classList.remove('hidden');
+          famBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (e.status === 409 && e.data.level === 'exact') {
           closeModal();
           setPanel('block', 'Already verified', 'This voter is already in the list and can’t be entered again.', e.data.matches || []);
           openModal({
@@ -1063,43 +1233,153 @@
           <input class="input" name="double_vote_note" value="${esc(v.double_vote_note)}" maxlength="200" placeholder="Where is the other vote?" /></div>
         <div class="field"><label>Notes</label><input class="input" name="notes" value="${esc(v.notes)}" /></div>
         <p class="help muted" style="font-size:12.5px;margin:0">If the serial number is in the voter list and the name is the same person, the official name is used.</p>
+        <div id="edit-fam" class="hidden" style="margin-top:14px"></div>
       </form>`,
       foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="do-edit">Save changes</button>`,
     });
+    let moveTo = ''; // mobile of another family the admin agreed to move this voter into
     $('#do-edit', m).addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
       const f = $('#edit-form', m);
       const body = Object.fromEntries(new FormData(f));
-      busy(e.currentTarget, true, 'Saving…');
+      body.join_family = !!moveTo && moveTo === String(body.mobile || '').replace(/\D/g, '').slice(-10);
+      busy(btn, true, 'Saving…');
       try { await api('PUT', `/api/voters/${v.id}`, body); closeModal(); toast('Voter updated'); onDone(); }
-      catch (er) { fail(er); busy(e.currentTarget, false); }
+      catch (er) {
+        busy(btn, false);
+        if (er.status === 409 && er.data.family_taken && er.data.family) {
+          // The new mobile belongs to another family: ask before moving the voter there.
+          const box = $('#edit-fam', m);
+          box.className = 'fam-box taken';
+          box.innerHTML = familyBox(er.data.family, 'This mobile number belongs to another family',
+            `Saving will move <b>${esc(v.name)}</b> into family ${fid(er.data.family.id)}. To keep them in their own family, change the number back.`);
+          moveTo = er.data.family.mobile;
+          btn.innerHTML = `${icon('family')}Move to family ${fid(er.data.family.id)} & save`;
+          box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else fail(er);
+      }
     });
   }
 
   // ---------------------------------------------------------------- families
   function familyCard(f) {
     const addMember = `#/add?mobile=${encodeURIComponent(f.mobile)}&street=${encodeURIComponent(f.street)}&fv=${f.family_votes}`;
+    const pending = f.members.filter((m) => !m.money_given).length;
     return `
-      <div class="card fam-card" data-family-card>
+      <div class="card fam-card" data-family-card data-fam-id="${f.id}">
         <div class="fam-head">
           <span class="fam-id">${fid(f.id)}</span>
           <div class="fam-title">
-            <b>${esc(f.street)}</b>
+            <b data-nt>${esc(f.street)}</b>
             <div class="meta"><span>${icon('phone')}${esc(fmtMobile(f.mobile))}</span><span>${icon('vote')}${esc(f.family_votes)} family votes</span><span>${icon('users')}${f.member_count} verified</span></div>
           </div>
           <span class="badge money-sum"></span>
         </div>
-        <div class="fam-created">${icon('user')}Family created by <b>${esc(f.created_by_name || '—')}</b> · ${esc(timeAgo(f.created_at))}</div>
+        <div class="fam-created">${icon('user')}<span>Family created by <b>${esc(f.created_by_name || '—')}</b> · ${esc(timeAgo(f.created_at))}</span>
+          ${f.updated_at ? `<span class="fam-edited">${icon('edit')}<span>Edited by</span> <b>${esc(f.updated_by_name || '—')}</b> · ${esc(timeAgo(f.updated_at))}</span>` : ''}</div>
         <div class="fam-members">
           ${f.members.map((m) => `
             <div class="fam-member">
               <div class="avatar">${esc(initials(m.name))}</div>
-              <div class="body"><b>${esc(m.name)}</b>
-                <div class="muted" style="font-size:12.5px"># ${esc(m.serial_no)} · added by ${esc(m.verified_by_name || '—')}</div></div>
-              ${moneyControl(m)}
+              <div class="body"><b data-nt>${esc(m.name)}</b>${m.double_vote ? ` <span class="badge badge-amber">${icon('alert')}Double vote</span>` : ''}
+                ${m.name_te ? `<div class="te-name" lang="te" data-nt>${esc(m.name_te)}</div>` : ''}
+                <div class="muted" style="font-size:12.5px"># <span data-nt>${esc(m.serial_no)}</span>${m.door_no ? ` · <span>Door</span> <span data-nt>${esc(m.door_no)}</span>` : ''} · <span>added by</span> ${esc(m.verified_by_name || '—')}</div></div>
+              ${moneyControl({ ...m, mobile: f.mobile })}
             </div>`).join('')}
         </div>
-        <div class="fam-foot"><a class="btn btn-sm btn-ghost" href="${addMember}">${icon('plus')}Add member</a></div>
+        <div class="fam-foot">
+          <button type="button" class="btn btn-sm btn-ghost" data-fam-edit="${f.id}">${icon('edit')}Edit family</button>
+          <a class="btn btn-sm btn-ghost" href="${addMember}">${icon('plus')}Add member</a>
+          <button type="button" class="btn btn-sm btn-success fam-money-btn ${pending ? '' : 'hidden'}" data-fam-money="${f.id}" data-mobile="${esc(f.mobile)}">${icon('rupee')}Give money</button>
+        </div>
       </div>`;
+  }
+
+  // Edit a family's shared details. Mobile, street and family votes change for every member.
+  function editFamilyModal(f, onDone) {
+    const m = openModal({
+      title: `Edit family ${fid(f.id)}`,
+      sub: 'These details are shared by everyone in the family. Changes apply to all members.',
+      wide: true,
+      body: `<form id="fam-form" novalidate autocomplete="off">
+        <div class="field"><label for="ff-mobile">Family mobile number</label>
+          <div class="input-group"><span class="prefix">+91</span>
+            <input class="input" id="ff-mobile" name="mobile" value="${esc(f.mobile)}" inputmode="numeric" maxlength="14" required /></div>
+          <span class="help">One mobile number belongs to one family only. A number already used by another family can’t be chosen.</span></div>
+        <div id="ff-taken" class="hidden"></div>
+        <div class="row-2">
+          <div class="field"><label for="ff-street">Street name</label>
+            <input class="input" id="ff-street" name="street" list="ff-streets" value="${esc(f.street)}" maxlength="120" required />
+            <datalist id="ff-streets"></datalist></div>
+          <div class="field"><label for="ff-fv">Family votes</label>
+            <div class="stepper"><button type="button" data-fstep="-1" aria-label="Decrease">−</button>
+              <input id="ff-fv" name="family_votes" type="number" min="1" max="99" value="${esc(f.family_votes)}" inputmode="numeric" />
+              <button type="button" data-fstep="1" aria-label="Increase">+</button></div></div>
+        </div>
+        <div class="section-cap" style="margin:6px 0 8px">${icon('users')}Members (${f.members.length})</div>
+        <div class="fam-edit-members">
+          ${f.members.map((x) => `<div class="fem"><span class="avatar">${esc(initials(x.name))}</span>
+            <div class="body"><b data-nt>${esc(x.name)}</b><small># <span data-nt>${esc(x.serial_no)}</span>${x.money_given ? ` · <span>money given</span>` : ''}</small></div>
+            ${isAdmin() ? `<button type="button" class="btn btn-sm btn-ghost" data-fem-edit="${x.id}">${icon('edit')}Edit voter</button>` : ''}</div>`).join('')}
+        </div>
+        <div id="ff-err" class="banner banner-red hidden" style="margin:14px 0 0"></div>
+      </form>`,
+      foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="ff-save">${icon('check')}Save family</button>`,
+    });
+    loadStreets().then((list) => { if ($('#ff-streets', m)) $('#ff-streets', m).innerHTML = list.map((s) => `<option value="${esc(s.street)}">`).join(''); });
+    const form = $('#fam-form', m);
+    const err = (msg) => { const e = $('#ff-err', m); e.innerHTML = msg ? `${icon('alert')}<span>${esc(msg)}</span>` : ''; e.classList.toggle('hidden', !msg); };
+    const taken = $('#ff-taken', m);
+    // Warn while typing if the new number already belongs to another family.
+    const checkMobile = debounce(async () => {
+      const mob = form.mobile.value.replace(/\D/g, '').slice(-10);
+      if (mob.length !== 10 || mob === f.mobile) { taken.className = 'hidden'; return; }
+      const { family } = await api('GET', `/api/families/lookup?mobile=${mob}`).catch(() => ({}));
+      if (family && family.id !== f.id) {
+        taken.className = 'fam-box taken';
+        taken.innerHTML = familyBox(family, 'This number already belongs to another family', 'Choose a different number. One mobile number can only be used by one family.');
+      } else taken.className = 'hidden';
+    }, 300);
+    form.mobile.addEventListener('input', (e) => { e.target.value = e.target.value.replace(/[^\d+ ]/g, ''); err(''); checkMobile(); });
+    form.addEventListener('click', (e) => {
+      const st = e.target.closest('[data-fstep]');
+      if (st) form.family_votes.value = Math.min(99, Math.max(1, (Number(form.family_votes.value) || 1) + Number(st.dataset.fstep)));
+      const ed = e.target.closest('[data-fem-edit]');
+      if (ed) {
+        api('GET', `/api/voters?q=${encodeURIComponent(f.members.find((x) => x.id === Number(ed.dataset.femEdit)).serial_no)}&mobile=${f.mobile}`)
+          .then((r) => { const v = r.voters.find((x) => x.id === Number(ed.dataset.femEdit)); if (v) editModal(v, onDone); })
+          .catch(fail);
+      }
+    });
+    $('#ff-save', m).addEventListener('click', async (e) => {
+      const mobile = form.mobile.value.replace(/\D/g, '').slice(-10);
+      if (!/^[6-9]\d{9}$/.test(mobile)) return err('Enter a valid 10-digit mobile number.');
+      if (!form.street.value.trim()) return err('Please enter the street name.');
+      busy(e.currentTarget, true, 'Saving…');
+      try {
+        await api('PATCH', `/api/families/${f.id}`, { mobile, street: form.street.value.trim(), family_votes: Number(form.family_votes.value) });
+        closeModal();
+        toast(`Family ${fid(f.id)} updated`);
+        onDone();
+      } catch (er) {
+        busy(e.currentTarget, false);
+        if (er.data && er.data.family_taken && er.data.family) {
+          taken.className = 'fam-box taken';
+          taken.innerHTML = familyBox(er.data.family, 'This number already belongs to another family', 'Choose a different number. One mobile number can only be used by one family.');
+        }
+        err(er.message);
+      }
+    });
+  }
+
+  // Compact description of a family (used for "this mobile already belongs to…").
+  function familyBox(fam, title, text, actions = '') {
+    return `<div class="fam-box-head">${icon('family')}<div><b>${title}</b>
+        <div class="fam-box-id"><span class="fam-chip">${icon('family')}${fid(fam.id)}</span>
+          <span>${icon('phone')}${esc(fmtMobile(fam.mobile))}</span>${fam.street ? `<span>${icon('pin')}<span data-nt>${esc(fam.street)}</span></span>` : ''}</div></div></div>
+      <div class="fam-box-members">${fam.members.map((x) => `<span class="mchip"><span class="avatar">${esc(initials(x.name))}</span><span data-nt>${esc(x.name)}</span></span>`).join('')}</div>
+      ${text ? `<p class="fam-box-text">${text}</p>` : ''}
+      ${actions ? `<div class="fam-box-actions">${actions}</div>` : ''}`;
   }
 
   async function viewFamilies(el, params) {
@@ -1128,6 +1408,7 @@
       const usp = new URLSearchParams({ q: q.q, money: q.money, street: q.street, mine: q.mine, page: q.page });
       const r = await api('GET', `/api/families?${usp}`);
       $('#f-count').textContent = `${fmtNum(r.total)} famil${r.total === 1 ? 'y' : 'ies'}${q.q || q.money || q.street || q.mine ? ' match your search' : ''}`;
+      $('#f-list').__data = r.families;
       $('#f-list').innerHTML = r.families.length ? r.families.map(familyCard).join('')
         : `<div class="card">${emptyState('family', 'No families found', q.q ? 'Try a family ID like F-0012, a name or a mobile number.' : 'Families appear when voters are added.')}</div>`;
       $$('[data-family-card]').forEach(updateFamilySummary);
@@ -1140,6 +1421,12 @@
     $('#f-money').addEventListener('change', (e) => { q.money = e.target.value; reload(); });
     $('#f-street').addEventListener('change', (e) => { q.street = e.target.value; reload(); });
     $('#f-mine').addEventListener('change', (e) => { q.mine = e.target.value; reload(); });
+    $('#f-list').addEventListener('click', (e) => {
+      const ed = e.target.closest('[data-fam-edit]');
+      if (!ed) return;
+      const f = ($('#f-list').__data || []).find((x) => x.id === Number(ed.dataset.famEdit));
+      if (f) editFamilyModal(f, () => load().catch(fail));
+    });
     $('#f-foot').addEventListener('click', (e) => {
       const b = e.target.closest('[data-page]');
       if (b) { q.page = Number(b.dataset.page); load().catch(fail); window.scrollTo({ top: 0, behavior: 'smooth' }); }

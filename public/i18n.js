@@ -220,6 +220,26 @@
     'Saved voters matched to the list': 'సేవ్ చేసిన ఓటర్లు జాబితాతో సరిపోల్చబడ్డారు',
     'Matching saved voters to the list…': 'సేవ్ చేసిన ఓటర్లను జాబితాతో సరిపోలుస్తోంది…', 'Was': 'ముందు', 'Now': 'ఇప్పుడు',
 
+    // money dialog, family edit, one mobile = one family
+    'Mark money given': 'డబ్బు ఇచ్చినట్లు గుర్తించండి', 'Money for': 'ఎవరికి డబ్బు', 'Who received the money?': 'డబ్బు ఎవరు తీసుకున్నారు?',
+    'Someone else': 'వేరే వ్యక్తి', 'Name of the person who received it': 'డబ్బు తీసుకున్న వ్యక్తి పేరు',
+    'Select everyone still waiting': 'మిగిలిన అందరినీ ఎంచుకోండి', 'Already given': 'ఇప్పటికే ఇచ్చారు', 'received by': 'తీసుకున్నవారు',
+    'Received by': 'తీసుకున్నవారు', ', received by': ', తీసుకున్నవారు', 'Choose at least one person.': 'కనీసం ఒకరిని ఎంచుకోండి.',
+    'Money is already marked for everyone in this family.': 'ఈ కుటుంబంలో అందరికీ డబ్బు ఇప్పటికే గుర్తించబడింది.',
+    'Edit family': 'కుటుంబం సవరించు', 'Give money': 'డబ్బు ఇవ్వండి', 'Edited by': 'సవరించినవారు',
+    'These details are shared by everyone in the family. Changes apply to all members.': 'ఈ వివరాలు కుటుంబం అందరికీ ఒకటే. మార్పులు అందరు సభ్యులకూ వర్తిస్తాయి.',
+    'One mobile number belongs to one family only. A number already used by another family can’t be chosen.':
+      'ఒక మొబైల్ నంబర్ ఒక కుటుంబానికే. వేరే కుటుంబం వాడుతున్న నంబర్ ఎంచుకోలేరు.',
+    'Members': 'సభ్యులు', 'money given': 'డబ్బు ఇచ్చారు', 'Edit voter': 'ఓటరు సవరించు', 'Save family': 'కుటుంబం సేవ్ చేయండి',
+    'This number already belongs to another family': 'ఈ నంబర్ ఇప్పటికే వేరే కుటుంబానిది',
+    'Choose a different number. One mobile number can only be used by one family.': 'వేరే నంబర్ ఎంచుకోండి. ఒక మొబైల్ నంబర్ ఒక కుటుంబానికే.',
+    'One number for the whole family. A number already used by a family can only be used to add members to that family.':
+      'మొత్తం కుటుంబానికి ఒకే నంబర్. ఇప్పటికే ఒక కుటుంబం వాడుతున్న నంబర్‌తో ఆ కుటుంబానికే సభ్యులను చేర్చగలరు.',
+    'Use a different number': 'వేరే నంబర్ వాడండి', 'This mobile number already belongs to a family': 'ఈ మొబైల్ నంబర్ ఇప్పటికే ఒక కుటుంబానిది',
+    'One mobile number = one family. Add this voter to that family, or enter a different number for a new family.':
+      'ఒక మొబైల్ నంబర్ = ఒక కుటుంబం. ఈ ఓటరును ఆ కుటుంబంలో చేర్చండి, లేదా కొత్త కుటుంబానికి వేరే నంబర్ ఇవ్వండి.',
+    'This mobile number belongs to another family': 'ఈ మొబైల్ నంబర్ వేరే కుటుంబానిది', 'Saving will move': 'సేవ్ చేస్తే',
+
     // account
     'Manage your login.': 'మీ లాగిన్ వివరాలు.', 'Install the 34 Division app': '34 డివిజన్ యాప్ ఇన్‌స్టాల్ చేయండి',
     'Opens full-screen from your home screen, like a normal app.': 'సాధారణ యాప్‌లాగే హోమ్ స్క్రీన్ నుంచి తెరుచుకుంటుంది.',
@@ -263,6 +283,18 @@
     [/^(\S+) family votes?$/, '$1 కుటుంబ ఓట్లు'],
     [/^Door (.+)$/, 'ఇంటి నం. $1'],
     [/^(\d+) people named$/, '$1 మంది పేరు'],
+    [/^\((\d+) of (\d+)\)$/, '($1 / $2)'],
+    [/^Money marked for (\d+) people$/, '$1 మందికి డబ్బు గుర్తించబడింది'],
+    [/^Edit family (F-\d+)$/, 'కుటుంబం $1 సవరించు'],
+    [/^Members \((\d+)\)$/, 'సభ్యులు ($1)'],
+    [/^Family (F-\d+) updated$/, 'కుటుంబం $1 మార్చబడింది'],
+    [/^Adding to family (F-\d+)$/, 'కుటుంబం $1లో చేరుస్తున్నారు'],
+    [/^This voter will join the (\d+) members? already in this family\.$/, 'ఈ ఓటరు ఈ కుటుంబంలోని $1 సభ్యులతో చేరతారు.'],
+    [/^Add to family (F-\d+)$/, 'కుటుంబం $1లో చేర్చండి'],
+    [/^Move to family (F-\d+) & save$/, 'కుటుంబం $1కి మార్చి సేవ్ చేయండి'],
+    [/^into family (F-\d+)\. To keep them in their own family, change the number back\.$/, 'ను కుటుంబం $1కి మారుస్తుంది. వారి కుటుంబంలోనే ఉంచాలంటే నంబర్‌ను మళ్లీ మార్చండి.'],
+    [/^This mobile number already belongs to family (F-\d+)\..*$/, 'ఈ మొబైల్ నంబర్ ఇప్పటికే కుటుంబం $1దే. ఆ కుటుంబంలో చేర్చండి లేదా వేరే నంబర్ వాడండి.'],
+    [/^Money for (\d+) people$/, '$1 మందికి డబ్బు'],
     [/^(\d+) yrs · (Male|Female|Other)$/, (_, a, g) => `${a} సం. · ${{ Male: 'పురుషుడు', Female: 'స్త్రీ', Other: 'ఇతరులు' }[g]}`],
     [/^(\d+) yrs$/, '$1 సం.'],
     [/^Type a name \(English or Telugu\), serial number or door number to pick from the voter list \((\S+) voters\)\.$/,

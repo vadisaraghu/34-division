@@ -71,13 +71,21 @@ h1, h2, h3 { margin: 0; letter-spacing: -.02em; }
 
 /* ---------- logo ---------- */
 .logo-mark {
+  position: relative; flex: none;
   width: 38px; height: 38px; border-radius: 11px;
-  background: var(--brand); color: var(--ink);
+  background: radial-gradient(120% 120% at 25% 15%, #FFDA5C 0%, #FFC72C 45%, #F5B400 100%); color: var(--ink);
   display: grid; place-items: center;
-  font-weight: 800; font-size: 17px; letter-spacing: -.04em;
-  box-shadow: inset 0 -3px 0 rgba(0,0,0,.08);
+  font-weight: 800; font-size: 17px; letter-spacing: -.05em; padding-right: 2px;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.06), 0 1px 2px rgba(20,24,40,.08);
+}
+/* small check badge, as on the home-screen icon */
+.logo-mark::after {
+  content: ''; position: absolute; top: -3px; right: -3px; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--ink) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFC72C' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / 64% no-repeat;
+  box-shadow: 0 0 0 2px var(--surface);
 }
 .logo-mark.lg { width: 64px; height: 64px; border-radius: 18px; font-size: 28px; }
+.logo-mark.lg::after { width: 20px; height: 20px; top: -4px; right: -4px; }
 .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
 .brand-name { font-weight: 800; font-size: 18px; letter-spacing: -.02em; line-height: 1.1; }
 .brand-sub { font-size: 12px; color: var(--ink-3); font-weight: 500; }
@@ -626,3 +634,78 @@ a.avatar { text-decoration: none; }
   .ac-row .ac-wrap { position: relative; }
   .ac-row .ac-wrap > .ac-list { top: calc(100% - 2px); }
 }
+
+/* ---------- money dialog ---------- */
+.md-section { margin-bottom: 18px; }
+.md-cap { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 14px; margin-bottom: 10px; }
+.md-cap .muted { font-weight: 600; font-size: 13px; }
+.md-cap .step { width: 22px; height: 22px; border-radius: 99px; background: var(--ink); color: var(--brand); display: grid; place-items: center; font-size: 12px; flex: none; }
+.pick-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.pick { display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px; border: 1.5px solid var(--line); border-radius: 12px; cursor: pointer; background: var(--surface); transition: border-color .15s, background .15s; }
+.pick input { width: 20px; height: 20px; accent-color: var(--green); margin: 1px 0 0; flex: none; }
+.pick:has(input:checked:not(:disabled)) { border-color: var(--green); background: var(--green-soft); }
+.pick.done { cursor: default; opacity: .65; background: var(--bg); }
+.pick-body { display: grid; gap: 1px; min-width: 0; }
+.pick-body b { font-size: 14.5px; overflow-wrap: anywhere; }
+.pick-body .te { font-family: 'Noto Sans Telugu', var(--font); font-size: 13px; color: var(--ink-2); }
+.pick-body small { font-size: 12px; color: var(--ink-3); display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.pick-body small svg { width: 12px; height: 12px; color: var(--green); }
+.recv-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.recv-opt { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border: 1.5px solid var(--line); border-radius: 99px; cursor: pointer; font-weight: 700; font-size: 14px; background: var(--surface); }
+.recv-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.recv-opt .avatar { width: 30px; height: 30px; font-size: 11.5px; background: var(--bg); color: var(--ink); }
+.recv-opt .avatar svg { width: 15px; height: 15px; }
+.recv-opt:has(input:checked) { border-color: var(--ink); background: var(--ink); color: #fff; }
+.recv-opt:has(input:checked) .avatar { background: var(--brand); color: var(--ink); }
+.recv-opt:has(input:focus-visible) { box-shadow: 0 0 0 4px rgba(255,199,44,.45); }
+.md-summary { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; font-size: 14px; }
+.md-summary svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.md-summary.ok { background: var(--green-soft); color: #0B5E2F; }
+.md-summary.warn { background: var(--amber-soft); color: #7A4A00; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.money-by { display: inline-flex; flex-direction: column; gap: 1px; }
+.money-by .recv { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-weight: 600; }
+.money-by .recv svg { width: 13px; height: 13px; }
+.money-by .recv b { color: #0B5E2F; }
+.money-by .tick { color: var(--ink-3); font-size: 12px; }
+
+/* ---------- family card actions, edit dialog, "mobile belongs to a family" box ---------- */
+.fam-foot { gap: 8px; flex-wrap: wrap; }
+.fam-created { flex-wrap: wrap; }
+.fam-edited { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-3); font-size: 12.5px; }
+.fam-edited svg { width: 13px; height: 13px; color: var(--ink-3); }
+.fam-money-btn { margin-left: auto; }
+.fam-edit-members { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.fem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.fem:first-child { border-top: 0; }
+.fem .avatar { width: 30px; height: 30px; font-size: 11.5px; background: var(--bg); color: var(--ink); }
+.fem .body { flex: 1; min-width: 0; display: grid; }
+.fem .body small { color: var(--ink-3); font-size: 12px; }
+.fam-box { border-radius: 14px; padding: 14px; margin: -4px 0 16px; border: 1.5px solid; }
+.fam-box.taken { border-color: #F3C46A; background: #FFFBF0; }
+.fam-box.joined { border-color: var(--green); background: var(--green-soft); }
+.fam-box-head { display: flex; gap: 10px; align-items: flex-start; }
+.fam-box-head > svg { width: 22px; height: 22px; flex: none; color: var(--amber); margin-top: 1px; }
+.fam-box.joined .fam-box-head > svg { color: var(--green); }
+.fam-box-head b { font-size: 14.5px; }
+.fam-box-id { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 4px; font-size: 13px; color: var(--ink-2); }
+.fam-box-id > span { display: inline-flex; align-items: center; gap: 4px; }
+.fam-box-id svg { width: 13px; height: 13px; }
+.fam-box-members { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0 32px; }
+.mchip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 99px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+.mchip .avatar { width: 22px; height: 22px; font-size: 10px; background: var(--brand-soft); color: var(--ink); }
+.fam-box-text { margin: 10px 0 0 32px; font-size: 13px; color: var(--ink-2); }
+.fam-box-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0 32px; }
+@media (max-width: 900px) {
+  .pick-list { grid-template-columns: 1fr; }
+  .fam-foot .btn { flex: 1 1 auto; justify-content: center; }
+  .fam-money-btn { margin-left: 0; width: 100%; order: -1; height: 44px; }
+  .fam-box-members, .fam-box-text, .fam-box-actions { margin-left: 0; }
+  .fam-box-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .money-by { flex-basis: 100%; order: 3; }
+}
+/* text flows naturally on narrow screens */
+.money-by .recv { display: block; }
+.money-by .recv svg { display: inline-block; vertical-align: -2px; margin-right: 3px; }
+.pick-body small { display: block; }
+.pick-body small svg { display: inline-block; vertical-align: -1px; margin-right: 2px; }

@@ -130,6 +130,13 @@ ALTER TABLE voters ADD COLUMN IF NOT EXISTS double_vote_note TEXT NOT NULL DEFAU
 -- '' = not checked yet / matches, 'mismatch' = admin must check, 'kept' = admin kept the typed name
 ALTER TABLE voters ADD COLUMN IF NOT EXISTS roll_check TEXT NOT NULL DEFAULT '';
 
+-- Who actually received the money (the voter, another family member, or someone else).
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS money_received_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE money_log ADD COLUMN IF NOT EXISTS received_by TEXT NOT NULL DEFAULT '';
+-- Last edit of a family's details (mobile / street / family votes).
+ALTER TABLE families ADD COLUMN IF NOT EXISTS updated_by INT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE families ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+
 -- Rows from a bulk upload that look like possible duplicates wait here
 -- until a volunteer decides "different person" or "duplicate".
 CREATE TABLE IF NOT EXISTS review_queue (

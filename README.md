@@ -56,6 +56,19 @@ What it powers:
   the official name; anything unclear goes to **Check names** (use the list name, move to another
   serial, or keep the typed name).
 
+## Families & money
+
+- **One mobile number = one family.** Typing a number that already belongs to a family shows that
+  family (ID, street, members). The volunteer either taps *Add to family F-0012* or uses a different
+  number; a new family can never reuse a number. The server enforces this too (also when an admin
+  edits a voter's mobile: moving into another family must be confirmed).
+- **Money:** tapping *Money* opens a dialog listing the family's members (looked up live). Choose who
+  the money is for (other members still waiting can be added) and **who received it**: a family
+  member or someone else typed in. A family card also has *Give money* for everyone still waiting.
+  The receiver is shown on each voter, kept in the money history and cleared on *Undo*.
+- **Edit family:** change the family's mobile number, street or family votes for all members at
+  once. A mobile number used by another family is refused. The card shows who edited it last.
+
 ## Double vote
 
 Each voter has a *double vote* yes/no with an optional note on where the other vote is. Set it on

@@ -119,6 +119,7 @@ app.post('/api/login', wrap(async (req, res) => {
   if (!user.approved) {
     return res.status(403).json({ error: 'Your account is waiting for admin approval. Please ask your admin to approve it.', pending: true });
   }
+  attempts.delete(req.ip + '|' + username); // only failed attempts count towards the limit
   await startSession(res, user.id);
   res.json({ user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role } });
 }));
@@ -309,6 +310,8 @@ async function insertVoter(client, v, userId, reviewedIds = []) {
   return { id: rows[0].id, family_id: fam.id, family_created: fam.created };
 }
 
+const fidText = (n) => `F-${String(n).padStart(4, '0')}`;
+
 // "F-0012", "f12", "12" -> 12 ; anything else -> null
 function parseFamilyId(q) {
   const m = String(q || '').trim().match(/^f?\s*-?\s*0*(\d{1,9})$/i);
@@ -337,7 +340,9 @@ app.post('/api/voters/check', auth, wrap(async (req, res) => {
     if (hit) v.name_key = nameKey(hit.name); // check duplicates with the official spelling
   }
   const dup = await findDuplicates(v, { excludeId: b.exclude_id ? Number(b.exclude_id) : null });
-  res.json({ ...dup, roll });
+  // The family that already owns this mobile number, if any.
+  const mobile_family = v.mobile ? await familyByMobile(pool, v.mobile) : null;
+  res.json({ ...dup, roll, mobile_family });
 }));
 
 app.post('/api/voters', auth, wrap(async (req, res) => {
@@ -349,6 +354,16 @@ app.post('/api/voters', auth, wrap(async (req, res) => {
     await client.query('BEGIN');
     // Serialise inserts so two volunteers can't save the same voter at the same instant.
     await client.query('SELECT pg_advisory_xact_lock(34)');
+    // One mobile number = one family. Using a number that a family already has
+    // must be a deliberate "add to this family", never a new family by accident.
+    const fam = await familyByMobile(client, v.mobile);
+    if (fam && req.body.join_family !== true) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: `This mobile number already belongs to family ${fidText(fam.id)}. Add the voter to that family, or use a different number.`,
+        family_taken: true, family: fam,
+      });
+    }
     await applyRoll(client, v);
     const dup = await findDuplicates(v, { client });
 
@@ -425,6 +440,18 @@ app.put('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
   const id = Number(req.params.id);
   const { value: v, error } = validateVoter(req.body);
   if (error) return res.status(400).json({ error });
+  // Moving a voter onto a mobile number of ANOTHER family must be confirmed.
+  const { rows: cur } = await pool.query('SELECT mobile FROM voters WHERE id = $1', [id]);
+  if (!cur[0]) return res.status(404).json({ error: 'Voter not found.' });
+  if (v.mobile !== cur[0].mobile && req.body.join_family !== true) {
+    const fam = await familyByMobile(pool, v.mobile);
+    if (fam) {
+      return res.status(409).json({
+        error: `This mobile number already belongs to family ${fidText(fam.id)}. Confirm to move the voter into that family.`,
+        family_taken: true, family: fam,
+      });
+    }
+  }
   await applyRoll(pool, v);
   // The admin's own edit is final: a name that differs from the list is kept as typed.
   if (v.roll_check === 'mismatch') v.roll_check = 'kept';
@@ -454,12 +481,15 @@ app.delete('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
 
 // ---------- families ----------
 const FAMILY_SELECT = `
-  SELECT f.id, f.mobile, f.created_at, cu.full_name AS created_by_name,
+  SELECT f.id, f.mobile, f.created_at, cu.full_name AS created_by_name, f.updated_at,
+         (SELECT full_name FROM users WHERE id = f.updated_by) AS updated_by_name,
          count(v.id)::int AS member_count, max(v.family_votes)::int AS family_votes, min(v.street) AS street,
          count(v.id) FILTER (WHERE v.money_given)::int AS money_count,
          json_agg(json_build_object('id', v.id, 'name', v.name, 'serial_no', v.serial_no,
                   'verified_by_name', vu.full_name, 'verified_at', v.verified_at,
+                  'name_te', v.name_te, 'door_no', v.door_no, 'double_vote', v.double_vote, 'mobile', v.mobile,
                   'money_given', v.money_given, 'money_at', v.money_at, 'money_by_name', mu.full_name,
+                  'money_received_by', v.money_received_by,
                   'money_logged', EXISTS (SELECT 1 FROM money_log ml WHERE ml.voter_id = v.id))
                   ORDER BY v.verified_at) AS members
   FROM families f
@@ -513,60 +543,159 @@ app.get('/api/families', auth, wrap(async (req, res) => {
   res.json({ families: list.rows, total: count.rows[0].n, page, pages: Math.max(1, Math.ceil(count.rows[0].n / size)) });
 }));
 
-app.get('/api/families/:id', auth, wrap(async (req, res) => {
+app.get('/api/families/:id(\\d+)', auth, wrap(async (req, res) => {
   const { rows } = await pool.query(`${FAMILY_SELECT} WHERE f.id = $1 ${FAMILY_GROUP}`, [Number(req.params.id)]);
   if (!rows[0]) return res.status(404).json({ error: 'Family not found.' });
   res.json({ family: rows[0] });
 }));
 
-// Tick / undo "money given" for ONE voter. Any signed-in user can do either;
-// every change is recorded in money_log with who did it and when.
-app.post('/api/voters/:id/money', auth, wrap(async (req, res) => {
-  const id = Number(req.params.id);
-  const given = req.body.given === true;
+// Ticks "money given" for one or more voters of the SAME family in one go, recording
+// who received it (the voter, another family member, or someone else typed in).
+// Voters already ticked are skipped. Every tick is logged in money_log.
+async function giveMoney(client, ids, receivedBy, userId) {
+  const { rows } = await client.query(
+    `SELECT v.id, v.name, v.mobile, v.money_given, u.full_name AS money_by_name FROM voters v
+     LEFT JOIN users u ON u.id = v.money_by WHERE v.id = ANY($1) FOR UPDATE OF v`,
+    [ids]
+  );
+  if (rows.length !== ids.length) return { error: 'Voter not found.', status: 404 };
+  if (new Set(rows.map((r) => r.mobile)).size > 1) return { error: 'These voters are not in the same family.', status: 400 };
+  const todo = rows.filter((r) => !r.money_given);
+  if (!todo.length) {
+    const r = rows[0];
+    return { error: `Already ticked by ${r.money_by_name || 'someone'}.`, status: 409 };
+  }
+  const recv = clean(receivedBy).slice(0, 120);
+  for (const r of todo) {
+    const who = recv || r.name;
+    await client.query(
+      'UPDATE voters SET money_given = TRUE, money_by = $2, money_at = now(), money_received_by = $3 WHERE id = $1',
+      [r.id, userId, who]
+    );
+    await client.query('INSERT INTO money_log (voter_id, given, user_id, received_by) VALUES ($1, TRUE, $2, $3)', [r.id, userId, who]);
+  }
+  return { ids: todo.map((r) => r.id), skipped: rows.length - todo.length };
+}
+
+async function inTransaction(fn) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query(
-      `SELECT v.money_given, u.full_name AS money_by_name FROM voters v
-       LEFT JOIN users u ON u.id = v.money_by WHERE v.id = $1 FOR UPDATE OF v`,
-      [id]
-    );
-    if (!rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Voter not found.' });
-    }
-    if (rows[0].money_given === given) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        error: given ? `Already ticked by ${rows[0].money_by_name || 'someone'}.` : 'Money tick was already undone.',
-      });
-    }
-    await client.query(
-      given
-        ? 'UPDATE voters SET money_given = TRUE, money_by = $2, money_at = now() WHERE id = $1'
-        : 'UPDATE voters SET money_given = FALSE, money_by = NULL, money_at = NULL WHERE id = $1',
-      given ? [id, req.user.id] : [id]
-    );
-    await client.query('INSERT INTO money_log (voter_id, given, user_id) VALUES ($1, $2, $3)', [id, given, req.user.id]);
-    await client.query('COMMIT');
+    const out = await fn(client);
+    await client.query(out && out.error ? 'ROLLBACK' : 'COMMIT');
+    return out;
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;
   } finally {
     client.release();
   }
+}
+
+// Tick / undo "money given" for ONE voter (optionally with more members of the
+// same family: also_ids). Any signed-in user can do either.
+app.post('/api/voters/:id/money', auth, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const given = req.body.given === true;
+  if (given) {
+    const extra = (Array.isArray(req.body.also_ids) ? req.body.also_ids : []).map(Number).filter((x) => Number.isInteger(x) && x !== id);
+    const out = await inTransaction((c) => giveMoney(c, [id, ...new Set(extra)], req.body.received_by, req.user.id));
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    const { rows } = await pool.query(`${SELECT_VOTER} WHERE v.id = ANY($1)`, [[id, ...extra]]);
+    return res.json({ voter: rows.find((r) => r.id === id), voters: rows, skipped: out.skipped });
+  }
+  const out = await inTransaction(async (client) => {
+    const { rows } = await client.query('SELECT money_given FROM voters WHERE id = $1 FOR UPDATE', [id]);
+    if (!rows[0]) return { error: 'Voter not found.', status: 404 };
+    if (!rows[0].money_given) return { error: 'Money tick was already undone.', status: 409 };
+    await client.query(
+      "UPDATE voters SET money_given = FALSE, money_by = NULL, money_at = NULL, money_received_by = '' WHERE id = $1", [id]
+    );
+    await client.query('INSERT INTO money_log (voter_id, given, user_id) VALUES ($1, FALSE, $2)', [id, req.user.id]);
+    return {};
+  });
+  if (out.error) return res.status(out.status).json({ error: out.error });
   const { rows } = await pool.query(`${SELECT_VOTER} WHERE v.id = $1`, [id]);
-  res.json({ voter: rows[0] });
+  res.json({ voter: rows[0], voters: rows });
 }));
 
 app.get('/api/voters/:id/money-log', auth, wrap(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT l.given, l.at, u.full_name AS by_name FROM money_log l
+    `SELECT l.given, l.at, l.received_by, u.full_name AS by_name FROM money_log l
      LEFT JOIN users u ON u.id = l.user_id WHERE l.voter_id = $1 ORDER BY l.at DESC LIMIT 50`,
     [Number(req.params.id)]
   );
   res.json(rows);
+}));
+
+// Money for several members of one family at once.
+app.post('/api/families/:id/money', auth, wrap(async (req, res) => {
+  const { rows: fam } = await pool.query('SELECT mobile FROM families WHERE id = $1', [Number(req.params.id)]);
+  if (!fam[0]) return res.status(404).json({ error: 'Family not found.' });
+  const ids = [...new Set((Array.isArray(req.body.voter_ids) ? req.body.voter_ids : []).map(Number).filter(Number.isInteger))];
+  if (!ids.length) return res.status(400).json({ error: 'Choose at least one family member.' });
+  const { rows: members } = await pool.query('SELECT id FROM voters WHERE mobile = $1 AND id = ANY($2)', [fam[0].mobile, ids]);
+  if (members.length !== ids.length) return res.status(400).json({ error: 'Some of these voters are not in this family.' });
+  const out = await inTransaction((c) => giveMoney(c, ids, req.body.received_by, req.user.id));
+  if (out.error) return res.status(out.status).json({ error: out.error });
+  const { rows } = await pool.query(`${SELECT_VOTER} WHERE v.id = ANY($1)`, [ids]);
+  res.json({ voters: rows, skipped: out.skipped });
+}));
+
+// Family that owns a mobile number (one mobile number = one family), or null.
+async function familyByMobile(client, mobile) {
+  if (!mobile) return null;
+  const { rows } = await client.query(
+    `SELECT f.id, f.mobile, min(v.street) AS street, count(v.id)::int AS member_count, max(v.family_votes)::int AS family_votes,
+            json_agg(json_build_object('id', v.id, 'name', v.name, 'name_te', v.name_te, 'serial_no', v.serial_no,
+                     'money_given', v.money_given, 'money_received_by', v.money_received_by) ORDER BY v.verified_at) AS members
+     FROM families f JOIN voters v ON v.mobile = f.mobile WHERE f.mobile = $1 GROUP BY f.id`,
+    [mobile]
+  );
+  return rows[0] || null;
+}
+
+app.get('/api/families/lookup', auth, wrap(async (req, res) => {
+  const m = normMobile(req.query.mobile);
+  res.json({ family: m.length === 10 ? await familyByMobile(pool, m) : null });
+}));
+
+// Edit a family's shared details: mobile number, street and family votes apply to
+// every member. A mobile number already used by another family is refused.
+app.patch('/api/families/:id', auth, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const out = await inTransaction(async (client) => {
+    const { rows: fam } = await client.query('SELECT id, mobile FROM families WHERE id = $1 FOR UPDATE', [id]);
+    if (!fam[0]) return { error: 'Family not found.', status: 404 };
+    const oldMobile = fam[0].mobile;
+    const mobile = req.body.mobile !== undefined ? normMobile(req.body.mobile) : oldMobile;
+    const street = req.body.street !== undefined ? clean(req.body.street) : null;
+    const fv = req.body.family_votes !== undefined ? Number.parseInt(req.body.family_votes, 10) : null;
+    if (!/^[6-9]\d{9}$/.test(mobile)) return { error: 'Enter a valid 10-digit mobile number.', status: 400 };
+    if (street !== null && (!street || street.length > 120)) return { error: 'Please enter the street name.', status: 400 };
+    if (fv !== null && !(fv >= 1 && fv <= 99)) return { error: 'Family votes must be between 1 and 99.', status: 400 };
+    if (mobile !== oldMobile) {
+      const other = await familyByMobile(client, mobile);
+      const { rows: taken } = await client.query('SELECT id FROM families WHERE mobile = $1', [mobile]);
+      if (taken[0]) {
+        return {
+          status: 409, family_taken: true, family: other,
+          error: `This mobile number already belongs to family ${fidText(taken[0].id)}${other ? ` (${other.members.map((x) => x.name).join(', ')})` : ''}. One mobile number can only be used by one family.`,
+        };
+      }
+      await client.query('UPDATE voters SET mobile = $1, updated_at = now() WHERE mobile = $2', [mobile, oldMobile]);
+      await client.query('UPDATE families SET mobile = $1 WHERE id = $2', [mobile, id]);
+    }
+    if (street !== null) {
+      await client.query('UPDATE voters SET street = $1, street_key = $2, updated_at = now() WHERE mobile = $3', [street, normStreet(street), mobile]);
+    }
+    if (fv !== null) await client.query('UPDATE voters SET family_votes = $1, updated_at = now() WHERE mobile = $2', [fv, mobile]);
+    await client.query('UPDATE families SET updated_by = $1, updated_at = now() WHERE id = $2', [req.user.id, id]);
+    return {};
+  });
+  if (out.error) return res.status(out.status).json(out);
+  const { rows } = await pool.query(`${FAMILY_SELECT} WHERE f.id = $1 ${FAMILY_GROUP}`, [id]);
+  res.json({ family: rows[0] });
 }));
 
 // ---------- voter list (official roll): suggestions, auto-fill, name checks ----------
