@@ -5,7 +5,7 @@ const { similarity } = require('./normalize');
 
 const SELECT_VOTER = `
   SELECT v.id, v.name, v.name_key, v.serial_no, v.mobile, v.street, v.street_key, v.family_votes,
-         v.notes, v.verified_at, u.full_name AS verified_by_name,
+         v.notes, v.door_no, v.name_te, v.double_vote, v.double_vote_note, v.roll_check, v.verified_at, u.full_name AS verified_by_name,
          f.id AS family_id, fu.full_name AS family_created_by,
          v.money_given, v.money_at, mu.full_name AS money_by_name,
          EXISTS (SELECT 1 FROM money_log ml WHERE ml.voter_id = v.id) AS money_logged
@@ -42,6 +42,13 @@ async function findDuplicates(v, { excludeId = null, client = pool } = {}) {
     [v.serial_no, v.mobile, v.name_key, excludeId]
   );
 
+  // Serial numbers that are real entries in the voter list: two of those with the
+  // same name are two different people (e.g. father and son both "Ravi Kumar").
+  const serials = [...new Set([v.serial_no, ...rows.map((r) => r.serial_no)].filter(Boolean))];
+  const inRoll = new Set(serials.length
+    ? (await client.query('SELECT DISTINCT serial_no FROM reference_voters WHERE serial_no = ANY($1)', [serials])).rows.map((r) => r.serial_no)
+    : []);
+
   const scored = rows
     .map((r) => {
       const nameSim = r.name_key === v.name_key ? 1 : Math.max(similarity(r.name_key, v.name_key), tokenOverlap(v.name_key, r.name_key));
@@ -57,7 +64,8 @@ async function findDuplicates(v, { excludeId = null, client = pool } = {}) {
 
       const nameLike = nameSim >= 0.6;
       let level = 'none';
-      if (nameSim === 1 && (sameSerial || sameMobile)) level = 'exact';
+      const listedApart = !sameSerial && inRoll.has(v.serial_no) && inRoll.has(r.serial_no);
+      if (nameSim === 1 && (sameSerial || (sameMobile && !listedApart))) level = 'exact';
       else if (nameLike && (sameSerial || sameMobile || sameStreet)) level = 'likely';
       else if (nameLike || sameSerial) level = 'possible';
       // Same mobile but a clearly different name = another member of the family.

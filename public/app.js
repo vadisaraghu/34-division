@@ -135,6 +135,8 @@
     dashboard: { title: 'Dashboard', render: viewDashboard },
     add: { title: 'Add voter', render: viewAdd },
     voters: { title: 'Voters', render: viewVoters },
+    roll: { title: 'Voter list', render: viewRoll },
+    checks: { title: 'Check names', render: viewChecks, admin: true },
     families: { title: 'Families', render: viewFamilies },
     review: { title: 'Review', render: viewReview },
     team: { title: 'Volunteers', render: viewTeam, admin: true },
@@ -308,10 +310,12 @@
     $('#side-nav').innerHTML = `
       ${navItem('dashboard', 'home', 'Dashboard')}
       ${navItem('add', 'plus', 'Add voter')}
+      ${navItem('roll', 'search', 'Voter list')}
       ${navItem('families', 'family', 'Families')}
       ${navItem('voters', 'list', 'Voters')}
       ${navItem('review', 'inbox', 'Review queue', pendingBadge)}
       ${isAdmin() ? `<div class="nav-label">Admin</div>
+        ${navItem('checks', 'alert', 'Check names')}
         ${navItem('upload', 'upload', 'Upload list')}
         ${navItem('team', 'users', 'Volunteers')}
         <a href="/api/export.csv">${icon('download')}<span>Export CSV</span></a>` : ''}`;
@@ -387,6 +391,31 @@
     });
   });
 
+  // Double-vote chip on voter rows: set / change / clear with a short note.
+  document.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-dv]');
+    if (!chip) return;
+    const on = chip.classList.contains('on');
+    const note = chip.querySelector('em') ? chip.querySelector('em').textContent : '';
+    const m = openModal({
+      title: 'Double vote',
+      sub: 'Does this voter also have a vote somewhere else?',
+      body: `<label class="check"><input type="checkbox" id="dv-on" ${on ? 'checked' : ''} />Yes, this voter has a double vote</label>
+        <div class="field" style="margin:12px 0 0"><label for="dv-note">Where is the other vote? <span class="muted" style="font-weight:500">(optional)</span></label>
+          <input class="input" id="dv-note" maxlength="200" value="${esc(note)}" placeholder="e.g. Ward 12, Guntur" /></div>`,
+      foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="dv-save">${icon('check')}Save</button>`,
+    });
+    $('#dv-save', m).addEventListener('click', async (ev) => {
+      busy(ev.currentTarget, true, 'Saving…');
+      try {
+        const { voter } = await api('POST', `/api/voters/${chip.dataset.dv}/double`, { double_vote: $('#dv-on', m).checked, note: $('#dv-note', m).value });
+        closeModal();
+        toast(voter.double_vote ? `${voter.name}: double vote marked` : `${voter.name}: no double vote`);
+        $$(`[data-dv="${voter.id}"]`).forEach((c) => { c.outerHTML = doubleChip(voter); });
+      } catch (er) { fail(er); busy(ev.currentTarget, false); }
+    });
+  });
+
   function updateFamilySummary(card) {
     const total = $$('.money-box', card).length;
     const done = $$('.money-box.on', card).length;
@@ -397,7 +426,12 @@
   }
 
   // ---------------------------------------------------------------- shared renderers
-  function voterRow(v, { matched = [], level = '', actions = '', money = false } = {}) {
+  // Double vote: a chip anyone can tap to mark / change it.
+  const doubleChip = (v) => `<button type="button" class="dv-chip ${v.double_vote ? 'on' : ''}" data-dv="${v.id}"
+      title="${v.double_vote ? esc(v.double_vote_note || 'Double vote') : 'Mark as double vote'}">${icon(v.double_vote ? 'alert' : 'box')}
+      <span>${v.double_vote ? 'Double vote' : 'No double vote'}</span>${v.double_vote && v.double_vote_note ? `<em data-nt>${esc(v.double_vote_note)}</em>` : ''}</button>`;
+
+  function voterRow(v, { matched = [], level = '', actions = '', money = false, dv = false } = {}) {
     const hl = (field, html) => (matched.includes(field) ? `<span class="hl">${html}</span>` : html);
     const nameHl = matched.includes('name') || matched.includes('similar name');
     const levelBadge = level === 'exact' ? '<span class="badge badge-red">Already verified</span>'
@@ -410,16 +444,20 @@
         <div class="avatar">${esc(initials(v.name))}</div>
         <div class="body">
           <div class="top"><span class="vname">${nameHl ? `<span class="hl">${esc(v.name)}</span>` : esc(v.name)}</span>${levelBadge}
-            ${v.family_id ? `<a class="fam-chip" href="#/families?q=${fid(v.family_id)}" title="Open family">${icon('family')}${fid(v.family_id)}</a>` : ''}</div>
+            ${v.family_id ? `<a class="fam-chip" href="#/families?q=${fid(v.family_id)}" title="Open family">${icon('family')}${fid(v.family_id)}</a>` : ''}
+            ${v.double_vote && !dv ? `<span class="badge badge-amber" title="${esc(v.double_vote_note)}">${icon('alert')}Double vote</span>` : ''}
+            ${v.roll_check === 'mismatch' && isAdmin() ? `<a class="badge badge-red" href="#/checks">${icon('alert')}Check name</a>` : ''}</div>
+          ${v.name_te ? `<div class="te-name" lang="te" data-nt>${esc(v.name_te)}</div>` : ''}
           <div class="meta">
             <span>${icon('hash')}${hl('serial no', esc(v.serial_no))}</span>
+            ${v.door_no ? `<span>${icon('home')}Door ${esc(v.door_no)}</span>` : ''}
             <span>${icon('phone')}${hl('mobile', esc(fmtMobile(v.mobile)))}</span>
             <span>${icon('pin')}${hl('street', esc(v.street))}</span>
             <span>${icon('vote')}${esc(v.family_votes)} family vote${v.family_votes == 1 ? '' : 's'}</span>
           </div>
           <div class="by">Verified by ${esc(v.verified_by_name || '—')} · ${esc(timeAgo(v.verified_at))}${v.notes ? ` · ${esc(v.notes)}` : ''}</div>
           ${matched.length ? `<div class="chips" style="margin-top:6px">${matched.map((m) => `<span class="badge badge-gray">same ${esc(m)}</span>`).join('')}</div>` : ''}
-          ${money ? `<div style="margin-top:8px">${moneyControl(v)}</div>` : ''}
+          ${money || dv ? `<div class="row-controls">${money ? moneyControl(v) : ''}${dv ? doubleChip(v) : ''}</div>` : ''}
         </div>
         ${actions ? `<div class="actions">${actions}</div>` : ''}
       </div>`;
@@ -433,6 +471,7 @@
       const same = (k) => (ref && ref[k] === v[k] ? ' class="same"' : '');
       return `<dl class="kv">
         <div><dt>Serial no</dt><dd${same('serial_no')}>${esc(v.serial_no)}</dd></div>
+        <div><dt>Door no</dt><dd>${esc(v.door_no || '—')}</dd></div>
         <div><dt>Mobile</dt><dd${same('mobile')}>${esc(fmtMobile(v.mobile))}</dd></div>
         <div><dt>Street</dt><dd>${esc(v.street)}</dd></div>
         <div><dt>Family votes</dt><dd>${esc(v.family_votes)}</dd></div>
@@ -448,6 +487,73 @@
           <div class="chips" style="margin-top:8px">${m.matched_on.map((f) => `<span class="badge badge-gray">same ${esc(f)}</span>`).join('')}</div>
         </div>`).join('')}
     </div>`;
+  }
+
+  // ---------------------------------------------------------------- voter list (official roll) rows
+  const REL = { Father: 'Father', Husband: 'Husband', Mother: 'Mother', Other: 'Relative' };
+  const relText = (r) => (r.relation_en || r.relation_te
+    ? `${REL[r.relation_type] || 'Relative'}: <span data-nt>${esc(r.relation_en || r.relation_te)}</span>` : '');
+  const ageText = (r) => [r.age ? `${r.age} yrs` : '', r.gender === 'F' ? 'Female' : r.gender === 'M' ? 'Male' : r.gender === 'O' ? 'Other' : '']
+    .filter(Boolean).join(' · ');
+
+  // Full details of one voter-list entry (used under the form and on Check names).
+  const refSummary = (r) => `
+    <div class="ref-sum">
+      <div class="ref-name"><b data-nt>${esc(r.name)}</b>${r.name_te ? ` <span class="te" lang="te" data-nt>${esc(r.name_te)}</span>` : ''}</div>
+      <div class="ref-meta">
+        ${relText(r) ? `<span>${icon('user')}${relText(r)}</span>` : ''}
+        ${ageText(r) ? `<span>${ageText(r)}</span>` : ''}
+        <span>${icon('hash')}Serial <span data-nt>${esc(r.serial_no)}</span></span>
+        ${r.door_no ? `<span>${icon('home')}Door <span data-nt>${esc(r.door_no)}</span></span>` : ''}
+        ${r.epic ? `<span>${icon('file')}<span data-nt>${esc(r.epic)}</span></span>` : ''}
+        ${r.listed_twice ? '<span class="badge badge-amber">Listed twice in the voter list</span>' : ''}
+      </div>
+    </div>`;
+
+  // Keeps everyone with the same name together, in order of first appearance.
+  function groupSameNames(items) {
+    const order = [];
+    const by = new Map();
+    items.forEach((r) => {
+      const g = r.group || r.name;
+      if (!by.has(g)) { by.set(g, []); order.push(g); }
+      by.get(g).push(r);
+    });
+    return order.flatMap((g) => by.get(g));
+  }
+
+  // Drop-down / list rows. People sharing a name get a header so volunteers
+  // compare father's name, age and door number before choosing.
+  function rollItems(items, idPrefix, { button = '' } = {}) {
+    let prev = null;
+    return items.map((r, i) => {
+      const head = r.same_name > 1 && r.group !== prev
+        ? `<div class="ac-group" aria-hidden="true">${icon('users')}<span>${r.same_name} people named <b data-nt>${esc(r.name)}</b>. Check father’s name, age and door number.</span></div>` : '';
+      prev = r.group;
+      return `${head}
+        <div class="ac-item${r.verified ? ' done' : ''}${r.same_name > 1 ? ' grouped' : ''}" role="option" id="${idPrefix}-${i}" data-i="${i}" data-group="${esc(r.group || '')}">
+          <div class="ac-main">
+            <div class="ac-name"><span data-nt>${esc(r.name)}</span>
+              ${r.listed_twice ? '<span class="badge badge-amber">Listed twice</span>' : ''}
+              ${r.verified ? `<span class="badge badge-red">${icon('check')}Already verified</span>` : ''}</div>
+            ${r.name_te ? `<div class="ac-te" lang="te" data-nt>${esc(r.name_te)}</div>` : ''}
+            <div class="ac-rel">${[relText(r), ageText(r) ? `<span>${ageText(r)}</span>` : ''].filter(Boolean).join(' · ')}</div>
+          </div>
+          <div class="ac-cell"><small>Serial</small><b class="mono" data-nt>${esc(r.serial_no)}</b></div>
+          <div class="ac-cell ac-door"><small>Door</small><b class="mono" data-nt>${esc(r.door_no || '—')}</b></div>
+          ${button ? `<div class="ac-btn">${r.verified ? '' : button.replace(/__SERIAL__/g, encodeURIComponent(r.serial_no))}</div>` : ''}
+        </div>`;
+    }).join('');
+  }
+
+  // Hovering one person highlights everyone else with the same name.
+  function hoverSameNames(container) {
+    container.addEventListener('mouseover', (e) => {
+      const it = e.target.closest('.ac-item.grouped');
+      $$('.ac-item.same-hl', container).forEach((x) => x.classList.remove('same-hl'));
+      if (it) $$('.ac-item.grouped', container).filter((x) => x.dataset.group === it.dataset.group).forEach((x) => x.classList.add('same-hl'));
+    });
+    container.addEventListener('mouseleave', () => $$('.ac-item.same-hl', container).forEach((x) => x.classList.remove('same-hl')));
   }
 
   async function loadStreets() {
@@ -477,6 +583,9 @@
         <a class="btn btn-brand" href="#/add">${icon('plus')}Add voter</a></div>
       ${s.pending_users ? `<div class="banner banner-green">${icon('users')}<span>${fmtNum(s.pending_users)} new volunteer${s.pending_users === 1 ? ' is' : 's are'} waiting for your approval.</span><a class="btn btn-sm btn-primary" href="#/team">Review sign-ups</a></div>` : ''}
       ${s.pending_review ? `<div class="banner banner-amber">${icon('inbox')}<span>${fmtNum(s.pending_review)} uploaded ${s.pending_review === 1 ? 'entry needs' : 'entries need'} a duplicate review.</span><a class="btn btn-sm btn-primary" href="#/review">Review now</a></div>` : ''}
+      ${isAdmin() && !s.roll_total ? `<div class="banner banner-amber">${icon('list')}<span>The voter list isn’t uploaded yet, so volunteers get no name suggestions.</span><a class="btn btn-sm btn-primary" href="#/upload?type=reference">Upload it</a></div>` : ''}
+      ${s.name_checks ? `<div class="banner banner-red">${icon('alert')}<span>${fmtNum(s.name_checks)} saved ${s.name_checks === 1 ? 'voter’s name doesn’t' : 'voters’ names don’t'} match the voter list at their serial number.</span><a class="btn btn-sm btn-primary" href="#/checks">Check names</a></div>` : ''}
+      ${s.double_votes ? `<div class="banner banner-amber">${icon('alert')}<span>${fmtNum(s.double_votes)} ${s.double_votes === 1 ? 'voter has' : 'voters have'} a double vote.</span><a class="btn btn-sm btn-ghost" href="#/voters?double=1">Show</a></div>` : ''}
       <div class="grid grid-4">
         <div class="card stat feature"><div class="label"><span class="ico">${icon('shield')}</span>Verified voters</div>
           <div class="value mono">${fmtNum(s.voters)}</div><div class="hint">+${fmtNum(s.today)} today</div></div>
@@ -517,22 +626,36 @@
       mobile: params.get('mobile') || '',
       street: params.get('street') || '',
       family_votes: params.get('fv') || '1',
+      serial: params.get('serial') || '',
     };
     el.innerHTML = `
       <div class="page-head"><div><h1>Add voter</h1><p>We check for duplicates while you type. Nothing is saved until you confirm.</p></div></div>
       ${pre.mobile ? `<div class="banner banner-green">${icon('family')}<span>Adding another member of the same family. Mobile, street and family votes are already filled in.</span></div>` : ''}
       <div class="grid grid-form">
         <form class="card card-pad" id="voter-form" novalidate autocomplete="off">
-          <div class="field"><label for="f-name">Voter name</label>
-            <input class="input" id="f-name" name="name" placeholder="e.g. Kandula Venkata Rao" required maxlength="120" autocapitalize="words" /></div>
-          <div class="row-2">
-            <div class="field"><label for="f-serial">Serial number</label>
-              <input class="input" id="f-serial" name="serial_no" placeholder="e.g. 245" required maxlength="30" inputmode="text" /></div>
-            <div class="field"><label for="f-fv">Family votes</label>
-              <div class="stepper"><button type="button" data-step="-1" aria-label="Decrease">−</button>
-                <input id="f-fv" name="family_votes" type="number" min="1" max="99" value="${esc(pre.family_votes)}" inputmode="numeric" />
-                <button type="button" data-step="1" aria-label="Increase">+</button></div></div>
+          <div class="field ac-wrap"><label for="f-name">Voter name</label>
+            <span class="help hidden" id="ref-help" style="margin-top:-2px"></span>
+            <input class="input" id="f-name" name="name" placeholder="e.g. Kandula Venkata Rao" required maxlength="120" autocapitalize="words"
+              role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ac-name" />
+            <div class="ac-list hidden" id="ac-name" role="listbox"></div></div>
+          <div class="row-2 ac-row">
+            <div class="field ac-wrap"><label for="f-serial">Serial number</label>
+              <input class="input" id="f-serial" name="serial_no" placeholder="e.g. 245" required maxlength="30" inputmode="numeric"
+                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ac-serial" />
+              <div class="ac-list hidden" id="ac-serial" role="listbox"></div></div>
+            <div class="field ac-wrap"><label for="f-door">Door number</label>
+              <input class="input" id="f-door" name="door_no" placeholder="e.g. 11-250" maxlength="60"
+                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ac-door" />
+              <div class="ac-list hidden" id="ac-door" role="listbox"></div></div>
           </div>
+          <div id="picked" class="picked hidden"></div>
+          <div class="field"><label for="f-fv">Family votes</label>
+            <div class="stepper"><button type="button" data-step="-1" aria-label="Decrease">−</button>
+              <input id="f-fv" name="family_votes" type="number" min="1" max="99" value="${esc(pre.family_votes)}" inputmode="numeric" />
+              <button type="button" data-step="1" aria-label="Increase">+</button></div></div>
+          <div class="field dv-field">
+            <label class="check"><input type="checkbox" id="f-dv" name="double_vote" />This voter has a double vote (also listed somewhere else)</label>
+            <input class="input hidden" id="f-dv-note" name="double_vote_note" maxlength="200" placeholder="Where is the other vote? e.g. Ward 12, Guntur" /></div>
           <div class="field"><label for="f-mobile">Family mobile number</label>
             <div class="input-group"><span class="prefix">+91</span>
               <input class="input" id="f-mobile" name="mobile" placeholder="98480 12345" required inputmode="numeric" maxlength="14" value="${esc(pre.mobile)}" /></div>
@@ -552,7 +675,7 @@
 
     const form = $('#voter-form');
     const panel = $('#dup-panel');
-    loadStreets().then((list) => { $('#street-list').innerHTML = list.map((s) => `<option value="${esc(s.street)}">`).join(''); });
+    loadStreets().then((list) => { if ($('#street-list')) $('#street-list').innerHTML = list.map((s) => `<option value="${esc(s.street)}">`).join(''); });
 
     const values = () => ({
       name: form.name.value.trim(),
@@ -561,23 +684,35 @@
       street: form.street.value.trim(),
       family_votes: Number(form.family_votes.value),
       notes: form.notes.value.trim(),
+      door_no: form.door_no.value.trim(),
+      double_vote: form.double_vote.checked,
+      double_vote_note: form.double_vote.checked ? form.double_vote_note.value.trim() : '',
     });
 
-    function setPanel(kind, title, text, matches = [], family = []) {
+    function setPanel(kind, title, text, matches = [], family = [], roll = null) {
       const ic = { idle: 'search', checking: 'loader', ok: 'check', warn: 'alert', block: 'ban' }[kind];
       const row = (m) => voterRow(m, { matched: m.matched_on, level: m.level,
         actions: `<button type="button" class="icon-btn" data-family="${esc(m.mobile)}" title="See this family">${icon('family')}</button>` });
       // Compact copy of the status above the save button (visible on phones,
       // where the full panel sits below the form).
       const inline = $('#dup-inline');
-      inline.className = `dup-inline ${kind}${kind === 'idle' ? ' hidden' : ''}`;
-      inline.innerHTML = `${icon(ic)}<span>${title}</span>${matches.length || family.length ? '<em>See below ↓</em>' : ''}`;
+      const rollWarn = roll && roll.name_matches === false;
+      inline.className = `dup-inline ${rollWarn && kind === 'ok' ? 'warn' : kind}${kind === 'idle' ? ' hidden' : ''}`;
+      inline.innerHTML = `${icon(rollWarn ? 'alert' : ic)}<span>${rollWarn && kind === 'ok' ? 'Name differs from the voter list' : title}</span>${matches.length || family.length || rollWarn ? '<em>See below ↓</em>' : ''}`;
       panel.innerHTML = `
+        ${roll ? rollNote(roll) : ''}
         <div class="dup-state ${kind}"><div class="ico">${icon(ic)}</div><div><h3>${title}</h3><p>${text}</p></div></div>
         ${matches.length ? `<div class="match-list">${matches.map(row).join('')}</div>` : ''}
         ${family.length ? `<div class="section-cap">${icon('family')}Family already verified on this mobile (${family.length})</div>
           <div class="match-list">${family.map(row).join('')}</div>` : ''}`;
     }
+    // What the voter list says at the typed serial number.
+    const rollNote = (roll) => `
+      <div class="roll-note ${roll.name_matches === false ? 'warn' : ''}">
+        <div class="section-cap" style="margin:0 0 8px">${icon('list')}Voter list · serial <span data-nt>${esc(roll.entry.serial_no)}</span></div>
+        ${refSummary(roll.entry)}
+        ${roll.name_matches === false ? `<p class="roll-warn">${icon('alert')}<span>The name you typed is different from the voter list at this serial number. Check the serial number. If you save anyway, the admin will be asked to check it.</span></p>` : ''}
+      </div>`;
     setPanel('idle', 'Duplicate check', 'Start typing the name, serial number or mobile. Matching voters will appear here.');
 
     let seq = 0;
@@ -593,9 +728,9 @@
         const r = await api('POST', '/api/voters/check', v);
         if (my !== seq) return;
         const fam = r.family || [];
-        if (r.level === 'exact') setPanel('block', 'Already verified', 'This voter is already in the list and can’t be entered again.', r.matches, fam);
-        else if (r.matches.length) setPanel('warn', `${r.matches.length} possible match${r.matches.length > 1 ? 'es' : ''}`, 'Check that this is a different person before saving. Highlighted fields match.', r.matches, fam);
-        else setPanel('ok', 'No duplicates found', fam.length ? 'This is a new member of a family that’s already in the list. You can save.' : 'This looks like a new voter. You can save.', [], fam);
+        if (r.level === 'exact') setPanel('block', 'Already verified', 'This voter is already in the list and can’t be entered again.', r.matches, fam, r.roll);
+        else if (r.matches.length) setPanel('warn', `${r.matches.length} possible match${r.matches.length > 1 ? 'es' : ''}`, 'Check that this is a different person before saving. Highlighted fields match.', r.matches, fam, r.roll);
+        else setPanel('ok', 'No duplicates found', fam.length ? 'This is a new member of a family that’s already in the list. You can save.' : 'This looks like a new voter. You can save.', [], fam, r.roll);
       } catch (e) { if (my === seq) fail(e); }
     }, 350);
 
@@ -603,8 +738,149 @@
       if (e.target.name === 'mobile') e.target.value = e.target.value.replace(/[^\d+ ]/g, '');
       e.target.classList.remove('invalid');
       $('#form-err').classList.add('hidden');
-      if (e.target.name !== 'notes' && e.target.name !== 'family_votes') check();
+      if (e.target.name === 'name') suggest('name');
+      if (e.target.name === 'serial_no') suggest('serial');
+      if (e.target.name === 'door_no') suggest('door');
+      if (!['notes', 'family_votes', 'door_no', 'double_vote', 'double_vote_note'].includes(e.target.name)) check();
     });
+    form.double_vote.addEventListener('change', (e) => {
+      form.double_vote_note.classList.toggle('hidden', !e.target.checked);
+      if (e.target.checked) form.double_vote_note.focus();
+    });
+
+    // ---- suggestions & auto-fill from the voter list
+    const LISTS = { name: $('#ac-name'), serial: $('#ac-serial'), door: $('#ac-door') };
+    const INPUTS = { name: form.name, serial: form.serial_no, door: form.door_no };
+    const fieldOf = (list) => Object.keys(LISTS).find((k) => LISTS[k] === list);
+    const inputOf = (list) => INPUTS[fieldOf(list)];
+    const lists = new Map(); // list element -> { items, idx }
+    let fromRef = null; // voter-list entry the form was last filled from
+    let acSeq = 0;
+    const serialKey = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
+    const picked = $('#picked');
+
+    function acClose(list) {
+      list.classList.add('hidden');
+      list.innerHTML = '';
+      lists.delete(list);
+      inputOf(list).setAttribute('aria-expanded', 'false');
+      inputOf(list).removeAttribute('aria-activedescendant');
+    }
+    function acOpen(list, items) {
+      if (!items.length) return acClose(list);
+      items = groupSameNames(items);
+      lists.set(list, { items, idx: -1 });
+      list.innerHTML = rollItems(items, list.id);
+      list.classList.remove('hidden');
+      inputOf(list).setAttribute('aria-expanded', 'true');
+    }
+    function acMove(list, step) {
+      const s = lists.get(list);
+      if (!s) return;
+      s.idx = (s.idx + step + s.items.length) % s.items.length;
+      $$('.ac-item', list).forEach((el) => el.classList.toggle('active', Number(el.dataset.i) === s.idx));
+      const act = $(`#${list.id}-${s.idx}`);
+      inputOf(list).setAttribute('aria-activedescendant', act.id);
+      act.scrollIntoView({ block: 'nearest' });
+    }
+    function showPicked(r) {
+      if (!r) { picked.classList.add('hidden'); picked.innerHTML = ''; return; }
+      picked.innerHTML = `<div class="picked-head">${icon('check')}<span>From the voter list</span>
+        <button type="button" class="btn btn-sm btn-ghost" id="unpick">${icon('x')}Change</button></div>${refSummary(r)}`;
+      picked.classList.remove('hidden');
+      $('#unpick', picked).addEventListener('click', () => {
+        form.name.value = ''; form.serial_no.value = ''; form.door_no.value = '';
+        fromRef = null; showPicked(null); check(); form.name.focus();
+      });
+    }
+    function choose(r) {
+      if (r.verified) {
+        toast(`${r.name} is already verified${r.verified_by_name ? ` by ${r.verified_by_name}` : ''}.`, 'err');
+        return false;
+      }
+      form.name.value = r.name;
+      form.serial_no.value = r.serial_no;
+      form.door_no.value = r.door_no || '';
+      fromRef = r;
+      showPicked(r);
+      [form.name, form.serial_no, form.door_no].forEach((i) => i.classList.remove('invalid'));
+      Object.values(LISTS).forEach(acClose);
+      check();
+      return true;
+    }
+
+    const suggest = debounce(async (field) => {
+      const list = LISTS[field];
+      const q = INPUTS[field].value.trim();
+      const my = ++acSeq;
+      if (field === 'serial' && fromRef && form.name.value === fromRef.name && serialKey(q) !== fromRef.serial_no) {
+        // Serial changed after an auto-fill: the filled name no longer belongs to it.
+        form.name.value = '';
+        form.door_no.value = '';
+        fromRef = null;
+        showPicked(null);
+      }
+      if (field === 'name' && fromRef && form.name.value !== fromRef.name) { fromRef = null; showPicked(null); }
+      if (!q || (field === 'name' && q.length < 2)) return acClose(list);
+      let items;
+      try { items = await api('GET', `/api/reference/search?field=${field}&q=${encodeURIComponent(q)}`); } catch { return; }
+      if (my !== acSeq || document.activeElement !== INPUTS[field]) return;
+      if (field === 'serial') {
+        const exact = items.filter((r) => r.serial_no === serialKey(q));
+        const nameFree = !form.name.value.trim() || (fromRef && form.name.value === fromRef.name);
+        if (exact.length === 1 && nameFree && !exact[0].verified) {
+          // One voter has this serial number: fill name and door number straight away.
+          form.name.value = exact[0].name;
+          form.door_no.value = exact[0].door_no || '';
+          form.name.classList.remove('invalid');
+          fromRef = exact[0];
+          showPicked(exact[0]);
+          acClose(list);
+          check();
+          return;
+        }
+      }
+      acOpen(list, items);
+    }, 200);
+
+    Object.values(LISTS).forEach((list) => {
+      list.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus in the input
+      list.addEventListener('click', (e) => {
+        const it = e.target.closest('.ac-item');
+        const s = lists.get(list);
+        if (it && s && choose(s.items[Number(it.dataset.i)])) (form.mobile.value ? form.street : form.mobile).focus();
+      });
+      hoverSameNames(list);
+      const inp = inputOf(list);
+      inp.addEventListener('keydown', (e) => {
+        if (!lists.has(list)) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); acMove(list, 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); acMove(list, -1); }
+        else if (e.key === 'Escape') { e.stopPropagation(); acClose(list); }
+        else if (e.key === 'Enter') {
+          const s = lists.get(list);
+          if (s.idx >= 0) { e.preventDefault(); if (choose(s.items[s.idx])) form.mobile.focus(); }
+        }
+      });
+      inp.addEventListener('blur', () => acClose(list));
+    });
+
+    // Opened from the Voter list page with a serial number: fill it in.
+    if (pre.serial) {
+      api('GET', `/api/reference/search?field=serial&q=${encodeURIComponent(pre.serial)}`).then((items) => {
+        const hit = items.find((r) => r.serial_no === serialKey(pre.serial));
+        if (hit) choose(hit);
+      }).catch(() => {});
+    }
+
+    api('GET', '/api/reference/stats').then(({ total }) => {
+      const h = $('#ref-help');
+      if (!h) return;
+      h.innerHTML = total
+        ? `Type a name (English or Telugu), serial number or door number to pick from the voter list (${fmtNum(total)} voters).`
+        : `No reference voter list uploaded yet, so there are no suggestions.${isAdmin() ? ' <a href="#/upload?type=reference">Upload it</a>' : ''}`;
+      h.classList.remove('hidden');
+    }).catch(() => {});
     form.addEventListener('click', (e) => {
       const b = e.target.closest('[data-step]');
       if (b) {
@@ -677,7 +953,7 @@
         title: '',
         body: `<div class="success-card"><div class="ico">${icon('check')}</div>
           <h2 style="font-size:22px">${esc(v.name)} is verified</h2>
-          <p class="muted" style="margin:6px 0 12px">Serial ${esc(v.serial_no)} · ${esc(v.street)}</p>
+          <p class="muted" style="margin:6px 0 12px">Serial ${esc(v.serial_no)}${v.door_no ? ` · Door ${esc(v.door_no)}` : ''} · ${esc(v.street)}</p>
           <a class="fam-chip lg" href="#/families?q=${fid(saved.family_id)}">${icon('family')}Family ${fid(saved.family_id)}</a>
           <p class="muted" style="margin:10px 0 0;font-size:13.5px">${saved.family_created
             ? `<span>New family created by</span> <b>${esc(state.user.full_name)}</b>`
@@ -697,7 +973,8 @@
 
   // ---------------------------------------------------------------- voters list
   async function viewVoters(el, params) {
-    const q = { q: params.get('q') || '', street: params.get('street') || '', mobile: params.get('mobile') || '', page: 1 };
+    const q = { q: params.get('q') || '', street: params.get('street') || '', mobile: params.get('mobile') || '', page: 1,
+      double: params.get('double') === '1' ? '1' : '' };
     el.innerHTML = `
       <div class="page-head"><div><h1>Voters</h1><p id="count-line">Loading…</p></div>
         <div style="display:flex;gap:10px">${isAdmin() ? `<a class="btn btn-ghost" href="/api/export.csv">${icon('download')}Export</a>` : ''}
@@ -709,26 +986,28 @@
         <div class="toolbar">
           <label class="search">${icon('search')}<input class="input" id="v-q" placeholder="Search name, serial, family ID, mobile or street" value="${esc(q.q)}" type="search" /></label>
           <select class="select" id="v-street"><option value="">All streets</option></select>
+          <label class="check filter-check"><input type="checkbox" id="v-double" ${q.double ? 'checked' : ''} />Double votes only</label>
         </div>
         <div id="v-list"><div class="card-pad"><div class="skeleton" style="height:200px"></div></div></div>
         <div class="list-foot" id="v-foot"></div>
       </div>`;
 
     loadStreets().then((list) => {
+      if (!$('#v-street')) return; // page already left
       $('#v-street').innerHTML = '<option value="">All streets</option>' +
         list.map((s) => `<option ${s.street === q.street ? 'selected' : ''} value="${esc(s.street)}">${esc(s.street)} (${s.voters})</option>`).join('');
     });
 
     async function load() {
-      const usp = new URLSearchParams({ q: q.q, street: q.street, mobile: q.mobile, page: q.page });
+      const usp = new URLSearchParams({ q: q.q, street: q.street, mobile: q.mobile, page: q.page, double: q.double });
       const r = await api('GET', `/api/voters?${usp}`);
-      $('#count-line').textContent = `${fmtNum(r.total)} verified voter${r.total === 1 ? '' : 's'}${q.q || q.street || q.mobile ? ' match your filters' : ''}`;
+      $('#count-line').textContent = `${fmtNum(r.total)} verified voter${r.total === 1 ? '' : 's'}${q.q || q.street || q.mobile || q.double ? ' match your filters' : ''}`;
       const acts = (v) => `
         <button class="icon-btn" data-family="${esc(v.mobile)}" title="Show family">${icon('family')}</button>
         ${isAdmin() ? `<button class="icon-btn" data-edit="${v.id}" title="Edit">${icon('edit')}</button>
         <button class="icon-btn" data-del="${v.id}" title="Delete">${icon('trash')}</button>` : ''}`;
       $('#v-list').innerHTML = r.voters.length
-        ? r.voters.map((v) => voterRow(v, { actions: acts(v), money: true })).join('')
+        ? r.voters.map((v) => voterRow(v, { actions: acts(v), money: true, dv: true })).join('')
         : emptyState('search', 'No voters found', q.q || q.street ? 'Try a different search or street.' : 'Verified voters will appear here.');
       $('#v-list').__data = r.voters;
       $('#v-foot').innerHTML = r.pages > 1 ? `
@@ -739,6 +1018,7 @@
 
     $('#v-q').addEventListener('input', debounce((e) => { q.q = e.target.value.trim(); q.page = 1; load().catch(fail); }, 300));
     $('#v-street').addEventListener('change', (e) => { q.street = e.target.value; q.page = 1; load().catch(fail); });
+    $('#v-double').addEventListener('change', (e) => { q.double = e.target.checked ? '1' : ''; q.page = 1; load().catch(fail); });
     $('#v-foot').addEventListener('click', (e) => {
       const b = e.target.closest('[data-page]');
       if (b) { q.page = Number(b.dataset.page); load().catch(fail); window.scrollTo({ top: 0, behavior: 'smooth' }); }
@@ -776,9 +1056,13 @@
           <div class="field"><label>Serial number</label><input class="input" name="serial_no" value="${esc(v.serial_no)}" required /></div>
           <div class="field"><label>Family votes</label><input class="input" name="family_votes" type="number" min="1" max="99" value="${esc(v.family_votes)}" /></div>
         </div>
+        <div class="field"><label>Door number</label><input class="input" name="door_no" value="${esc(v.door_no)}" maxlength="60" /></div>
         <div class="field"><label>Mobile</label><input class="input" name="mobile" value="${esc(v.mobile)}" inputmode="numeric" /></div>
         <div class="field"><label>Street</label><input class="input" name="street" value="${esc(v.street)}" /></div>
+        <div class="field"><label class="check"><input type="checkbox" name="double_vote" value="1" ${v.double_vote ? 'checked' : ''} />Double vote</label>
+          <input class="input" name="double_vote_note" value="${esc(v.double_vote_note)}" maxlength="200" placeholder="Where is the other vote?" /></div>
         <div class="field"><label>Notes</label><input class="input" name="notes" value="${esc(v.notes)}" /></div>
+        <p class="help muted" style="font-size:12.5px;margin:0">If the serial number is in the voter list and the name is the same person, the official name is used.</p>
       </form>`,
       foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="do-edit">Save changes</button>`,
     });
@@ -836,6 +1120,7 @@
       <div class="list-foot" id="f-foot" style="border:0;padding:16px 0"></div>`;
 
     loadStreets().then((list) => {
+      if (!$('#f-street')) return; // page already left
       $('#f-street').innerHTML = '<option value="">All streets</option>' + list.map((s) => `<option value="${esc(s.street)}">${esc(s.street)}</option>`).join('');
     });
 
@@ -1012,6 +1297,101 @@
     await load();
   }
 
+  // ---------------------------------------------------------------- voter list (search the official roll)
+  async function viewRoll(el, params) {
+    el.innerHTML = `
+      <div class="page-head"><div><h1>Voter list</h1><p>Search everyone in the ward’s voter list by name (English or Telugu), serial number, door number or voter ID.</p></div></div>
+      <div class="card">
+        <div class="toolbar">
+          <label class="search">${icon('search')}<input class="input" id="r-q" type="search" placeholder="Name, serial no, door no or voter ID" value="${esc(params.get('q') || '')}" /></label>
+          <select class="select" id="r-field" aria-label="Search in">
+            <option value="auto">Search in: everything</option><option value="name">Name or voter ID</option>
+            <option value="serial">Serial number</option><option value="door">Door number</option></select>
+        </div>
+        <div id="r-list" class="roll-list"></div>
+      </div>`;
+    const list = $('#r-list');
+    hoverSameNames(list);
+    const { total } = await api('GET', '/api/reference/stats');
+    // Digits only = serial number; digits with "-" or "/" = door number; anything else = name.
+    const guess = (q) => (/^\d+$/.test(q) ? 'serial' : /\d/.test(q) && /[-/]/.test(q) ? 'door' : 'name');
+    let seq = 0;
+    async function load() {
+      const q = $('#r-q').value.trim();
+      const field = $('#r-field').value === 'auto' ? guess(q) : $('#r-field').value;
+      if (!total) {
+        list.innerHTML = emptyState('list', 'The voter list isn’t uploaded yet', isAdmin() ? 'Upload it from Upload list → Reference list.' : 'Ask your admin to upload it.',
+          isAdmin() ? `<a class="btn btn-brand" href="#/upload?type=reference" style="margin-top:12px">${icon('upload')}Upload voter list</a>` : '');
+        return;
+      }
+      if (!q) {
+        list.innerHTML = emptyState('search', 'Search the voter list', `${fmtNum(total)} voters. Type a name, serial number, door number (e.g. 11-250) or voter ID.`);
+        return;
+      }
+      const my = ++seq;
+      const items = groupSameNames(await api('GET', `/api/reference/search?field=${field}&q=${encodeURIComponent(q)}&limit=50`));
+      if (my !== seq) return;
+      list.innerHTML = items.length
+        ? rollItems(items, 'r', { button: `<a class="btn btn-sm btn-brand" href="#/add?serial=__SERIAL__">${icon('plus')}Add</a>` })
+        : emptyState('search', 'No one found', 'Try another spelling, or search by serial or door number.');
+    }
+    $('#r-q').addEventListener('input', debounce(() => load().catch(fail), 250));
+    $('#r-field').addEventListener('change', () => load().catch(fail));
+    await load();
+    $('#r-q').focus();
+  }
+
+  // ---------------------------------------------------------------- check names (admin)
+  async function viewChecks(el) {
+    el.innerHTML = `
+      <div class="page-head"><div><h1>Check names</h1><p>Saved voters whose name doesn’t match the voter list at their serial number. Pick the right person, or keep the name as typed.</p></div>
+        <button class="btn btn-ghost" id="resync">${icon('undo')}Re-check all names</button></div>
+      <div id="c-list"><div class="card card-pad"><div class="skeleton" style="height:160px"></div></div></div>`;
+    async function load() {
+      const items = await api('GET', '/api/reference/checks');
+      $('#c-list').innerHTML = items.length ? items.map((v) => `
+        <div class="card check-card">
+          <div class="card-head"><h3><span class="muted" style="font-weight:600">Saved as</span> <span data-nt>${esc(v.name)}</span></h3>
+            <span class="badge badge-gray">${icon('hash')}Serial <span data-nt>${esc(v.serial_no)}</span></span></div>
+          <div class="card-pad">
+            <p class="muted" style="margin:0 0 14px;font-size:13.5px">Verified by ${esc(v.verified_by_name || '—')} · ${esc(fmtMobile(v.mobile))} · ${esc(v.street)}</p>
+            <div class="section-cap">${icon('list')}Voter list at serial <span data-nt>${esc(v.serial_no)}</span></div>
+            ${v.at_serial.length ? v.at_serial.map((r) => `<div class="check-opt">${refSummary(r)}
+                <button class="btn btn-sm btn-primary" data-use="${r.id}" data-v="${v.id}">${icon('check')}Use this name</button></div>`).join('')
+              : '<p class="muted">Nobody is listed at this serial number.</p>'}
+            ${v.suggestions.length ? `<div class="section-cap" style="margin-top:16px">${icon('search')}Closest names elsewhere in the list</div>
+              ${v.suggestions.map((r) => `<div class="check-opt">${refSummary(r)}
+                ${r.verified ? `<span class="badge badge-red">Already verified</span>`
+                  : `<button class="btn btn-sm btn-ghost" data-use="${r.id}" data-v="${v.id}">${icon('arrow')}Move to serial <span data-nt>${esc(r.serial_no)}</span></button>`}</div>`).join('')}` : ''}
+            <button class="btn btn-ghost btn-block" data-keep="${v.id}" style="margin-top:14px">Keep “<span data-nt>${esc(v.name)}</span>” as typed</button>
+          </div>
+        </div>`).join('')
+        : `<div class="card">${emptyState('check', 'All names match', 'Every saved voter matches the voter list at their serial number.')}</div>`;
+    }
+    $('#c-list').addEventListener('click', async (e) => {
+      const use = e.target.closest('[data-use]');
+      const keep = e.target.closest('[data-keep]');
+      const btn = use || keep;
+      if (!btn) return;
+      busy(btn, true, 'Saving…');
+      try {
+        await api('POST', `/api/voters/${use ? use.dataset.v : keep.dataset.keep}/roll-fix`, use ? { ref_id: Number(use.dataset.use) } : { action: 'keep' });
+        toast(use ? 'Name updated from the voter list' : 'Name kept as typed');
+        await load();
+      } catch (er) { fail(er); busy(btn, false); }
+    });
+    $('#resync').addEventListener('click', async (e) => {
+      busy(e.currentTarget, true, 'Checking…');
+      try {
+        const r = await api('POST', '/api/reference/sync-names');
+        toast(`${r.updated.length} name${r.updated.length === 1 ? '' : 's'} updated from the voter list`);
+        await load();
+      } catch (er) { fail(er); }
+      busy(e.currentTarget, false);
+    });
+    await load();
+  }
+
   // ---------------------------------------------------------------- upload (admin)
   function loadSheetJS() {
     if (window.XLSX) return Promise.resolve();
@@ -1024,20 +1404,114 @@
     });
   }
 
-  async function viewUpload(el) {
-    const FIELDS = [
-      ['name', 'Voter name', /name|పేరు/i],
-      ['serial_no', 'Serial number', /serial|sl\.?\s*no|s\.?\s*no|sno|క్రమ/i],
+  async function viewUpload(el, params) {
+    const isRef = params.get('type') === 'reference';
+    const F_NAME = ['name', 'Voter name', /name|పేరు/i];
+    const F_SERIAL = ['serial_no', 'Serial number', /serial|sl\.?\s*no|s\.?\s*no|sno|క్రమ/i];
+    const F_DOOR = ['door_no', 'Door number', /door|house|h\.?\s*no|d\.?\s*no|ఇంటి/i];
+    const REF_EXTRA = [
+      ['name_te', 'Name in Telugu', /telugu|తెలుగు/i],
+      ['relation_type', 'Relation (father / husband / mother)', /^relation( type)?$|relation ?type|సంబంధ/i],
+      ['relation_en', 'Father / husband name', /relative|relation name|father|husband|guardian|తండ్రి|భర్త/i],
+      ['relation_te', 'Father / husband name in Telugu', /(relative|relation|father|husband).*(telugu|తెలుగు)/i],
+      ['age', 'Age', /^age\b|వయస్సు/i],
+      ['gender', 'Gender', /gender|sex|లింగ/i],
+      ['epic', 'Voter ID', /voter ?id|epic|card/i],
+      ['part_no', 'Part number', /part|విభాగ/i],
+      ['listed_twice', 'Listed twice', /twice|duplicate/i],
+    ];
+    const FIELDS = isRef ? [F_NAME, REF_EXTRA[0], F_SERIAL, F_DOOR, ...REF_EXTRA.slice(1)] : [
+      F_NAME, F_SERIAL, F_DOOR,
       ['mobile', 'Mobile', /mobile|phone|cell|contact|ఫోన్|మొబైల్/i],
       ['street', 'Street', /street|road|colony|area|address|వీధి/i],
       ['family_votes', 'Family votes', /family|votes|members|count|ఓట్లు/i],
     ];
+    const OPTIONAL = { family_votes: 'Not in file (use 1)', door_no: 'Not in file' };
+    REF_EXTRA.forEach(([k]) => { OPTIONAL[k] = 'Not in file'; });
+    // Most specific headings are matched first, so "Relative Name (Telugu)" isn't taken as the voter's name.
+    const GUESS_ORDER = ['relation_te', 'relation_type', 'relation_en', 'name_te', 'name', 'serial_no', 'door_no', 'epic', 'part_no',
+      'age', 'gender', 'listed_twice', 'mobile', 'street', 'family_votes'];
+    const refCount = isRef ? await api('GET', '/api/reference/stats').then((r) => r.total).catch(() => 0) : 0;
     el.innerHTML = `
-      <div class="page-head"><div><h1>Upload voter list</h1><p>Upload an Excel or CSV file. Exact duplicates are skipped. Look-alikes go to the review queue.</p></div></div>
+      <div class="page-head"><div>
+        <h1>${isRef ? 'Upload reference voter list' : 'Upload voter list'}</h1>
+        <p>${isRef
+          ? 'The ward’s full voter list (Excel or CSV). It powers the name suggestions on Add voter, the Voter list page and the name checks. Nobody is marked verified by uploading it.'
+          : 'Upload an Excel or CSV file. Exact duplicates are skipped. Look-alikes go to the review queue.'}</p></div></div>
+      <div class="seg-tabs" role="tablist">
+        <a role="tab" href="#/upload?type=reference" class="${isRef ? 'on' : ''}" aria-selected="${isRef}">${icon('list')}Reference list</a>
+        <a role="tab" href="#/upload" class="${isRef ? '' : 'on'}" aria-selected="${!isRef}">${icon('shield')}Verified voters</a>
+      </div>
+      ${isRef ? `<div class="banner banner-green" id="ref-count">${icon('list')}<span>${refCount
+        ? `${fmtNum(refCount)} voters are in the reference list now.`
+        : 'No reference list uploaded yet.'}</span>${refCount ? `<button class="btn btn-sm btn-ghost" id="ref-clear">${icon('trash')}Clear list</button>` : ''}</div>` : ''}
       <label class="drop" id="drop"><input type="file" id="file" accept=".xlsx,.xls,.csv" hidden />
         <div class="ico">${icon('upload')}</div><h3 style="font-size:17px">Drop your file here or tap to choose</h3>
         <p class="muted" style="margin:4px 0 0">Excel (.xlsx, .xls) or CSV · first row must be column headings</p></label>
       <div id="u-step"></div>`;
+
+    const clearBtn = $('#ref-clear');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      const m = openModal({
+        title: 'Clear the reference list?',
+        sub: `All ${fmtNum(refCount)} reference voters will be removed. Verified voters are not affected.`,
+        foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="do-clear">${icon('trash')}Clear list</button>`,
+      });
+      $('#do-clear', m).addEventListener('click', async (ev) => {
+        busy(ev.currentTarget, true);
+        try { await api('DELETE', '/api/reference'); closeModal(); toast('Reference list cleared'); router(); }
+        catch (er) { fail(er); busy(ev.currentTarget, false); }
+      });
+    });
+
+    async function uploadReference(btn, all) {
+      const total = { added: 0, updated: 0, invalid: [] };
+      const BATCH = 1000;
+      let ok = true;
+      try {
+        if ($('#u-replace') && $('#u-replace').checked) {
+          busy(btn, true, 'Clearing the old list…');
+          await api('DELETE', '/api/reference');
+        }
+        for (let i = 0; i < all.length; i += BATCH) {
+          busy(btn, true, `Uploading… ${Math.min(i + BATCH, all.length)} / ${all.length}`);
+          const r = await api('POST', '/api/reference/import', { rows: all.slice(i, i + BATCH) });
+          total.added += r.added; total.updated += r.updated; total.invalid.push(...r.invalid);
+        }
+      } catch (er) { ok = false; fail(er); }
+      // Line up the voters already saved with the (new) list.
+      let sync = null;
+      if (ok) {
+        busy(btn, true, 'Matching saved voters to the list…');
+        sync = await api('POST', '/api/reference/sync-names').catch((er) => { fail(er); return null; });
+      }
+      busy(btn, false);
+      btn.disabled = true;
+      const { total: now } = await api('GET', '/api/reference/stats').catch(() => ({ total: 0 }));
+      const syncHtml = sync ? `
+          <h3 style="font-size:14px;margin:20px 0 8px">Saved voters matched to the list</h3>
+          <p class="muted" style="margin:0 0 10px">${fmtNum(sync.updated.length)} name${sync.updated.length === 1 ? '' : 's'} changed to the official spelling.
+            ${sync.mismatched ? `${fmtNum(sync.mismatched)} need${sync.mismatched === 1 ? 's' : ''} a check.` : ''}</p>
+          ${sync.updated.length ? `<div class="table-wrap card"><table class="table"><thead><tr><th>Serial</th><th>Was</th><th>Now</th></tr></thead><tbody>
+            ${sync.updated.map((u) => `<tr><td class="mono" data-nt>${esc(u.serial_no)}</td><td data-nt>${esc(u.from)}</td>
+              <td data-nt><b>${esc(u.to)}</b><div class="te" lang="te">${esc(u.name_te)}</div></td></tr>`).join('')}</tbody></table></div>` : ''}
+          ${sync.mismatched ? `<a class="btn btn-primary" href="#/checks" style="margin-top:12px">${icon('alert')}Check ${fmtNum(sync.mismatched)} name${sync.mismatched === 1 ? '' : 's'}</a>` : ''}` : '';
+      $('#u-result').innerHTML = `
+        <div class="card card-pad" style="margin-top:20px">
+          <h3 style="font-size:16px;margin-bottom:14px">${ok ? 'Upload complete' : 'Upload stopped part-way'}</h3>
+          <div class="result-grid">
+            <div class="stat"><div class="label"><span class="ico g">${icon('check')}</span>Added</div><div class="value mono">${fmtNum(total.added)}</div></div>
+            <div class="stat"><div class="label"><span class="ico b">${icon('edit')}</span>Updated</div><div class="value mono">${fmtNum(total.updated)}</div><div class="hint">already in the list</div></div>
+            <div class="stat"><div class="label"><span class="ico y">${icon('list')}</span>In the list now</div><div class="value mono">${fmtNum(now)}</div></div>
+            <div class="stat"><div class="label"><span class="ico" style="background:var(--red-soft);color:var(--red)">${icon('alert')}</span>Invalid rows</div><div class="value mono">${fmtNum(total.invalid.length)}</div></div>
+          </div>
+          <a class="btn btn-brand" href="#/add" style="margin-top:16px">${icon('plus')}Go to Add voter</a>
+          ${syncHtml}
+          ${total.invalid.length ? `<h3 style="font-size:14px;margin:20px 0 8px">Rows that need fixing in your file</h3>
+            <div class="table-wrap card"><table class="table"><thead><tr><th>Row</th><th>Problem</th></tr></thead><tbody>
+            ${total.invalid.slice(0, 100).map((x) => `<tr><td class="mono">${esc(x.row)}</td><td>${esc(x.error)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+        </div>`;
+    }
 
     let rows = [];
     let headers = [];
@@ -1062,7 +1536,9 @@
       } catch (e) { step.innerHTML = ''; return fail(e); }
 
       const guess = {};
-      FIELDS.forEach(([k, , re]) => { const i = headers.findIndex((h, idx) => re.test(h) && !Object.values(guess).includes(idx)); guess[k] = i; });
+      GUESS_ORDER.map((k) => FIELDS.find((f) => f[0] === k)).filter(Boolean).forEach(([k, , re]) => {
+        guess[k] = headers.findIndex((h, idx) => re.test(h) && !Object.values(guess).includes(idx));
+      });
 
       step.innerHTML = `
         <div class="card" style="margin-top:20px">
@@ -1071,26 +1547,24 @@
             <p class="muted" style="margin:0 0 14px">Match each field to a column in your file.</p>
             <div class="map-grid">${FIELDS.map(([k, label]) => `
               <div class="field"><label>${label}</label><select class="select input" data-map="${k}">
-                <option value="-1">${k === 'family_votes' ? 'Not in file (use 1)' : '— choose column —'}</option>
+                <option value="-1">${OPTIONAL[k] || '— choose column —'}</option>
                 ${headers.map((h, i) => `<option value="${i}" ${guess[k] === i ? 'selected' : ''}>${esc(h || `Column ${i + 1}`)}</option>`).join('')}
               </select></div>`).join('')}</div>
             <h3 style="font-size:14px;margin:6px 0 10px">Preview</h3>
             <div class="table-wrap card" id="u-preview"></div>
             <div id="u-err" class="banner banner-red hidden" style="margin-top:16px"></div>
+            ${isRef && refCount ? `<label class="check" style="margin-top:16px"><input type="checkbox" id="u-replace" />Replace the current reference list (delete the ${fmtNum(refCount)} voters already in it first)</label>` : ''}
             <button class="btn btn-brand" id="u-go" style="margin-top:18px">${icon('upload')}Upload ${fmtNum(rows.length)} voters</button>
           </div>
         </div>
         <div id="u-result"></div>`;
 
       const mapping = () => Object.fromEntries($$('[data-map]').map((s) => [s.dataset.map, Number(s.value)]));
-      const mapRow = (r, mp, idx) => ({
-        __row: idx + 2,
-        name: mp.name >= 0 ? r[mp.name] : '',
-        serial_no: mp.serial_no >= 0 ? r[mp.serial_no] : '',
-        mobile: mp.mobile >= 0 ? r[mp.mobile] : '',
-        street: mp.street >= 0 ? r[mp.street] : '',
-        family_votes: mp.family_votes >= 0 ? r[mp.family_votes] : 1,
-      });
+      const mapRow = (r, mp, idx) => {
+        const out = { __row: idx + 2 };
+        FIELDS.forEach(([k]) => { out[k] = mp[k] >= 0 ? r[mp[k]] : k === 'family_votes' ? 1 : ''; });
+        return out;
+      };
       const preview = () => {
         const mp = mapping();
         $('#u-preview').innerHTML = `<table class="table"><thead><tr>${FIELDS.map(([, l]) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
@@ -1101,12 +1575,13 @@
 
       $('#u-go').addEventListener('click', async (e) => {
         const mp = mapping();
-        const missing = FIELDS.filter(([k]) => k !== 'family_votes' && mp[k] < 0).map(([, l]) => l);
+        const missing = FIELDS.filter(([k]) => !OPTIONAL[k] && mp[k] < 0).map(([, l]) => l);
         const err = $('#u-err');
         if (missing.length) { err.innerHTML = `${icon('alert')}Choose a column for: ${esc(missing.join(', '))}`; err.classList.remove('hidden'); return; }
         err.classList.add('hidden');
         const btn = e.currentTarget;
         const all = rows.map((r, i) => mapRow(r, mp, i));
+        if (isRef) return uploadReference(btn, all);
         const total = { added: 0, already_verified: 0, queued: 0, invalid: [] };
         const BATCH = 250;
         try {
@@ -1164,12 +1639,15 @@
           </div>
           <div class="card"><div class="card-head"><h3>Menu</h3></div>
             <div class="nav" style="padding:8px">
+              <a href="#/roll">${icon('search')}<span>Voter list (search by name, serial, door)</span></a>
               <a href="#/families">${icon('family')}<span>Families &amp; money</span></a>
               <a href="#/voters">${icon('list')}<span>All voters</span></a>
+              <a href="#/voters?double=1">${icon('alert')}<span>Double votes</span></a>
               <a href="#/review">${icon('inbox')}<span>Review queue</span><span class="badge badge-red ${state.pending ? '' : 'hidden'}" data-pending>${state.pending}</span></a>
             </div></div>
           ${isAdmin() ? `<div class="card"><div class="card-head"><h3>Admin tools</h3></div>
             <div class="nav" style="padding:8px">
+              <a href="#/checks">${icon('alert')}<span>Check names</span></a>
               <a href="#/upload">${icon('upload')}<span>Upload voter list</span></a>
               <a href="#/team">${icon('users')}<span>Volunteers</span></a>
               <a href="/api/export.csv">${icon('download')}<span>Export all voters (CSV)</span></a>

@@ -1,6 +1,6 @@
 // 34 Division service worker: makes the site installable and loads the app
 // shell fast. API calls are never cached, so voter data is always live.
-const CACHE = '34div-v4';
+const CACHE = '34div-v6';
 const SHELL = ['/', '/app.css', '/i18n.js', '/app.js', '/favicon.svg', '/manifest.webmanifest', '/icon-192.png'];
 
 self.addEventListener('install', (e) => {

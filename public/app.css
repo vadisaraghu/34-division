@@ -506,3 +506,123 @@ a.avatar { text-decoration: none; }
   .stat .value { font-size: 26px; }
   .row-2 { grid-template-columns: 1fr; gap: 0; }
 }
+
+/* ---------- voter list suggestions (Add voter) & Voter list page ---------- */
+.ac-wrap { position: relative; }
+/* Serial + door drop-downs span the whole row, not just their half. */
+.ac-row { position: relative; }
+.ac-row .ac-wrap { position: static; }
+.ac-list {
+  position: absolute; left: 0; right: 0; top: calc(100% - 10px); z-index: 30;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg); max-height: min(420px, 60vh); overflow-y: auto; overscroll-behavior: contain;
+}
+.ac-wrap > .ac-list { top: calc(100% - 2px); }
+.ac-group {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; color: #7A4A00;
+  background: var(--amber-soft); border-top: 1px solid var(--line); position: sticky; top: 0; z-index: 1;
+}
+.ac-group:first-child { border-top: 0; }
+.ac-group svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.ac-item {
+  display: grid; grid-template-columns: minmax(0, 1fr) 62px 104px; gap: 10px; align-items: center;
+  padding: 10px 14px; cursor: pointer; font-size: 14px; border-top: 1px solid var(--line);
+}
+.ac-list > .ac-item:first-child { border-top: 0; }
+.ac-item:hover, .ac-item.active { background: var(--brand-soft); }
+.ac-item.grouped { box-shadow: inset 3px 0 0 var(--amber); }
+.ac-item.same-hl { background: #FFF1C9; box-shadow: inset 4px 0 0 var(--brand-strong); }
+.ac-item.done { cursor: not-allowed; background: #FAFAFC; }
+.ac-item.done .ac-main { opacity: .7; }
+.ac-main { min-width: 0; }
+.ac-name { font-weight: 700; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.ac-name .badge { font-size: 11px; padding: 1px 7px; }
+.ac-name .badge svg { width: 11px; height: 11px; }
+.ac-te { font-family: 'Noto Sans Telugu', var(--font); font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+.ac-rel { font-size: 12.5px; color: var(--ink-3); margin-top: 1px; overflow-wrap: anywhere; }
+.ac-cell { display: grid; gap: 1px; min-width: 0; }
+.ac-cell small { font-size: 10.5px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+.ac-cell b { font-size: 13.5px; overflow-wrap: anywhere; }
+.ac-btn { display: flex; justify-content: flex-end; }
+.roll-list .ac-item { grid-template-columns: minmax(0, 1fr) 70px 130px 84px; padding: 12px 22px; cursor: default; }
+.roll-list .ac-item:hover { background: transparent; }
+.roll-list .ac-item.same-hl { background: #FFF1C9; }
+.roll-list .ac-group { position: static; padding: 9px 22px; }
+
+/* chosen voter-list entry under the form, and the summary block */
+.picked { border: 1.5px solid var(--green); background: var(--green-soft); border-radius: 12px; padding: 12px 14px; margin: -4px 0 16px; }
+.picked-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--green); margin-bottom: 6px; }
+.picked-head svg { width: 16px; height: 16px; }
+.picked-head .btn { margin-left: auto; height: 30px; }
+.ref-sum .ref-name { font-size: 15px; line-height: 1.5; }
+.ref-sum .te, .te-name, td .te { font-family: 'Noto Sans Telugu', var(--font); color: var(--ink-2); font-weight: 500; }
+.te-name { font-size: 13.5px; margin-top: 1px; }
+.ref-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--ink-2); margin-top: 4px; }
+.ref-meta > span { display: inline-flex; align-items: center; gap: 5px; }
+.ref-meta svg { width: 14px; height: 14px; color: var(--ink-3); }
+.roll-note { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; background: var(--surface); }
+.roll-note.warn { border-color: #F3C46A; background: #FFFBF0; }
+.roll-warn { display: flex; gap: 8px; margin: 10px 0 0; font-size: 13px; font-weight: 600; color: #7A4A00; }
+.roll-warn svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+
+/* double vote */
+.dv-field .check { background: var(--bg); }
+.dv-field .input { margin-top: 8px; }
+.row-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+.dv-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 10px; cursor: pointer;
+  border: 1.5px solid var(--line); background: var(--surface); color: var(--ink-3); font: inherit; font-size: 13px; font-weight: 700;
+}
+.dv-chip svg { width: 15px; height: 15px; }
+.dv-chip.on { background: var(--amber-soft); border-color: #F3C46A; color: #7A4A00; }
+.dv-chip em { font-style: normal; font-weight: 600; opacity: .85; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-check { padding: 0 14px; height: 48px; align-items: center; background: var(--bg); white-space: nowrap; }
+.filter-check input { margin: 0; }
+
+/* check names */
+.check-card { margin-bottom: 16px; }
+.check-card .card-head h3 { font-size: 16px; }
+.check-opt { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 8px; }
+.check-opt .ref-sum { flex: 1; min-width: 220px; }
+
+/* ---------- upload page tabs ---------- */
+.seg-tabs { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 18px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); max-width: 100%; }
+.seg-tabs a { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 9px; font-weight: 700; font-size: 14px; color: var(--ink-2); text-decoration: none; }
+.seg-tabs a svg { width: 16px; height: 16px; }
+.seg-tabs a.on { background: var(--ink); color: var(--brand); }
+
+/* ---------- phones & small screens ---------- */
+/* Grid / flex children may shrink below their content (stops wide tables pushing the page sideways). */
+.grid > *, .main, .content, .card { min-width: 0; }
+@media (max-width: 900px) {
+  /* 16px stops iPhones zooming in when a box is tapped. */
+  .input, .select, textarea.input, .stepper input { font-size: 16px; }
+  .banner { flex-wrap: wrap; gap: 10px 12px; padding: 12px 14px; }
+  .banner > span { flex: 1 1 200px; }
+  .page-head { flex-wrap: wrap; gap: 12px; }
+  .toolbar .search { min-width: 0; flex-basis: 100%; }
+  .filter-check { width: 100%; }
+  .seg-tabs { display: flex; }
+  .seg-tabs a { flex: 1; justify-content: center; padding: 8px 10px; }
+  .roll-list .ac-item { grid-template-columns: minmax(0, 1fr) 62px 96px; padding: 12px 16px; }
+  .roll-list .ac-btn { grid-column: 1 / -1; justify-content: stretch; }
+  .roll-list .ac-btn .btn { width: 100%; }
+  .roll-list .ac-group { padding: 9px 16px; }
+  .ac-list { max-height: 55vh; }
+  .modal-foot .btn { flex: 1; }
+  .check-opt .btn { width: 100%; }
+}
+@media (max-width: 420px) {
+  .content { padding-left: 12px; padding-right: 12px; }
+  .card-pad { padding: 16px 14px; }
+  .ac-item { grid-template-columns: minmax(0, 1fr) 52px 78px; gap: 8px; padding: 10px 12px; }
+  .ac-cell b { font-size: 12.5px; }
+  .roll-list .ac-item { grid-template-columns: minmax(0, 1fr) 52px 80px; padding: 12px; }
+  .page-head h1 { font-size: 21px; }
+  .voter-row .meta { gap: 2px 10px; }
+  .dv-chip em { max-width: 110px; }
+  .result-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  /* row-2 stacks on small phones: keep the serial/door drop-down under the field being typed in */
+  .ac-row .ac-wrap { position: relative; }
+  .ac-row .ac-wrap > .ac-list { top: calc(100% - 2px); }
+}

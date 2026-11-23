@@ -1,3 +1,8 @@
 node_modules/
 .env
 *.log
+# Voter list source files: personal data, never commit (upload through the app instead)
+*.pdf
+*.xlsx
+*.xls
+*.csv

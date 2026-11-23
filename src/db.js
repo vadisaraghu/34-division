@@ -90,6 +90,46 @@ INSERT INTO families (mobile, created_by, created_at)
 SELECT DISTINCT ON (mobile) mobile, verified_by, verified_at FROM voters ORDER BY mobile, verified_at
 ON CONFLICT (mobile) DO NOTHING;
 
+-- Door number of the voter (from the reference list or typed in).
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS door_no TEXT NOT NULL DEFAULT '';
+
+-- Reference voter list (e.g. the electoral roll) uploaded by the admin.
+-- Used only for suggestions / auto-fill on the Add voter form; it is NOT the
+-- verified list. The same serial can appear with different names (several
+-- polling parts), but a name + serial pair is stored once.
+CREATE TABLE IF NOT EXISTS reference_voters (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  name_key    TEXT NOT NULL,
+  name_norm   TEXT NOT NULL,
+  serial_no   TEXT NOT NULL,
+  door_no     TEXT NOT NULL DEFAULT '',
+  uploaded_by INT REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS reference_name_serial_uq ON reference_voters (name_key, serial_no);
+CREATE INDEX IF NOT EXISTS reference_serial_idx ON reference_voters (serial_no);
+CREATE INDEX IF NOT EXISTS reference_name_trgm ON reference_voters USING gin (name_norm gin_trgm_ops);
+-- Extra details from the official roll (all optional for other uploads).
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS name_te TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS name_phon TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS relation_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS relation_en TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS relation_te TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS age INT;
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS gender TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS epic TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS part_no TEXT NOT NULL DEFAULT '';
+ALTER TABLE reference_voters ADD COLUMN IF NOT EXISTS listed_twice BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS reference_phon_trgm ON reference_voters USING gin (name_phon gin_trgm_ops);
+
+-- Telugu name (from the voter list), double vote, and the voter-list name check.
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS name_te TEXT NOT NULL DEFAULT '';
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS double_vote BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS double_vote_note TEXT NOT NULL DEFAULT '';
+-- '' = not checked yet / matches, 'mismatch' = admin must check, 'kept' = admin kept the typed name
+ALTER TABLE voters ADD COLUMN IF NOT EXISTS roll_check TEXT NOT NULL DEFAULT '';
+
 -- Rows from a bulk upload that look like possible duplicates wait here
 -- until a volunteer decides "different person" or "duplicate".
 CREATE TABLE IF NOT EXISTS review_queue (

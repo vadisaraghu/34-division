@@ -16,7 +16,9 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool, migrate } = require('./src/db');
 const { findDuplicates, SELECT_VOTER } = require('./src/duplicates');
-const { validateVoter, nameKey, normMobile, normSerial, normStreet, clean } = require('./src/normalize');
+const {
+  validateVoter, nameKey, normName, normMobile, normSerial, normStreet, clean, phonKey, nameScore, sameName,
+} = require('./src/normalize');
 
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -225,7 +227,11 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
     pool.query('SELECT count(*)::int AS n FROM review_queue'),
   ]);
   const money = (await pool.query(
-    'SELECT count(*) FILTER (WHERE money_given)::int AS given, count(*)::int AS total FROM voters'
+    `SELECT count(*) FILTER (WHERE money_given)::int AS given, count(*)::int AS total,
+            count(*) FILTER (WHERE double_vote)::int AS double_votes,
+            count(*) FILTER (WHERE roll_check = 'mismatch')::int AS name_checks,
+            (SELECT count(*)::int FROM reference_voters) AS roll_total
+     FROM voters`
   )).rows[0];
   const pendingUsers = req.user.role === 'admin'
     ? (await pool.query('SELECT count(*)::int AS n FROM users WHERE NOT approved')).rows[0].n
@@ -237,6 +243,9 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
     pending_users: pendingUsers,
     money_given: money.given,
     money_total: money.total,
+    double_votes: money.double_votes,
+    name_checks: req.user.role === 'admin' ? money.name_checks : 0,
+    roll_total: money.roll_total,
     top_streets: streets.rows,
     volunteers: volunteers.rows,
     daily: daily.rows,
@@ -257,12 +266,45 @@ async function ensureFamily(client, mobile, userId) {
   return rows[0];
 }
 
+// Voter-list entries at a serial number (normally one).
+async function rollAt(client, serial) {
+  if (!serial) return [];
+  const { rows } = await client.query(
+    `SELECT id, name, name_te, serial_no, door_no, relation_type, relation_en, relation_te, age, gender, epic, listed_twice
+     FROM reference_voters WHERE serial_no = $1 ORDER BY (name_te <> '') DESC, id`,
+    [serial]
+  );
+  return rows;
+}
+
+// Lines a voter up with the voter list by serial number. When the typed name is
+// the same person as the list entry, the official spelling (English from the
+// Telugu) is used; otherwise the voter is flagged for the admin to check.
+// Mutates v: name, name_key, name_te, door_no, roll_check.
+async function applyRoll(client, v) {
+  const list = await rollAt(client, v.serial_no);
+  const hit = list.find((r) => sameName(v.name, r.name));
+  if (hit) {
+    v.name = hit.name;
+    v.name_key = nameKey(hit.name);
+    v.name_te = hit.name_te;
+    if (!v.door_no) v.door_no = hit.door_no;
+    v.roll_check = '';
+  } else {
+    v.name_te = '';
+    v.roll_check = list.length ? 'mismatch' : '';
+  }
+  return { hit, list };
+}
+
 async function insertVoter(client, v, userId, reviewedIds = []) {
   const fam = await ensureFamily(client, v.mobile, userId);
   const { rows } = await client.query(
-    `INSERT INTO voters (name, name_key, serial_no, mobile, street, street_key, family_votes, notes, reviewed_matches, verified_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-    [v.name, v.name_key, v.serial_no, v.mobile, v.street, v.street_key, v.family_votes, v.notes, reviewedIds, userId]
+    `INSERT INTO voters (name, name_key, serial_no, mobile, street, street_key, family_votes, notes, reviewed_matches, verified_by,
+                         door_no, name_te, double_vote, double_vote_note, roll_check)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+    [v.name, v.name_key, v.serial_no, v.mobile, v.street, v.street_key, v.family_votes, v.notes, reviewedIds, userId,
+      v.door_no || '', v.name_te || '', !!v.double_vote, v.double_vote_note || '', v.roll_check || '']
   );
   return { id: rows[0].id, family_id: fam.id, family_created: fam.created };
 }
@@ -283,9 +325,19 @@ app.post('/api/voters/check', auth, wrap(async (req, res) => {
     street_key: normStreet(b.street),
   };
   if (v.name_key.length < 3 && !v.serial_no && !v.mobile) {
-    return res.json({ level: 'none', matches: [] });
+    return res.json({ level: 'none', matches: [], roll: null });
   }
-  res.json(await findDuplicates(v, { excludeId: b.exclude_id ? Number(b.exclude_id) : null }));
+  // What the voter list says at this serial number, and whether the typed name fits.
+  let roll = null;
+  const list = await rollAt(pool, v.serial_no);
+  if (list.length) {
+    const typed = clean(b.name);
+    const hit = typed ? list.find((r) => sameName(typed, r.name)) : null;
+    roll = { entry: hit || list[0], name_matches: typed ? !!hit : null };
+    if (hit) v.name_key = nameKey(hit.name); // check duplicates with the official spelling
+  }
+  const dup = await findDuplicates(v, { excludeId: b.exclude_id ? Number(b.exclude_id) : null });
+  res.json({ ...dup, roll });
 }));
 
 app.post('/api/voters', auth, wrap(async (req, res) => {
@@ -297,6 +349,7 @@ app.post('/api/voters', auth, wrap(async (req, res) => {
     await client.query('BEGIN');
     // Serialise inserts so two volunteers can't save the same voter at the same instant.
     await client.query('SELECT pg_advisory_xact_lock(34)');
+    await applyRoll(client, v);
     const dup = await findDuplicates(v, { client });
 
     if (dup.level === 'exact') {
@@ -331,7 +384,7 @@ app.get('/api/voters', auth, wrap(async (req, res) => {
     const digits = q.replace(/\D/g, '');
     params.push(`%${q.toLowerCase()}%`);
     const p = params.length;
-    const conds = [`lower(v.name) LIKE $${p}`, `lower(v.serial_no) LIKE $${p}`, `lower(v.street) LIKE $${p}`];
+    const conds = [`lower(v.name) LIKE $${p}`, `lower(v.serial_no) LIKE $${p}`, `lower(v.street) LIKE $${p}`, `lower(v.door_no) LIKE $${p}`, `v.name_te LIKE $${p}`];
     if (digits.length >= 3) {
       params.push(`%${digits}%`);
       conds.push(`v.mobile LIKE $${params.length}`);
@@ -347,6 +400,8 @@ app.get('/api/voters', auth, wrap(async (req, res) => {
     params.push(normStreet(street));
     where.push(`v.street_key = $${params.length}`);
   }
+  if (req.query.double === '1') where.push('v.double_vote');
+  if (req.query.check === '1') where.push("v.roll_check = 'mismatch'");
   if (req.query.mobile) {
     params.push(normMobile(req.query.mobile));
     where.push(`v.mobile = $${params.length}`);
@@ -370,14 +425,19 @@ app.put('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
   const id = Number(req.params.id);
   const { value: v, error } = validateVoter(req.body);
   if (error) return res.status(400).json({ error });
+  await applyRoll(pool, v);
+  // The admin's own edit is final: a name that differs from the list is kept as typed.
+  if (v.roll_check === 'mismatch') v.roll_check = 'kept';
   const dup = await findDuplicates(v, { excludeId: id });
   if (dup.level === 'exact') return res.status(409).json({ error: 'Another verified voter already has these details.', ...dup });
   await ensureFamily(pool, v.mobile, req.user.id);
   try {
     const r = await pool.query(
-      `UPDATE voters SET name=$1, name_key=$2, serial_no=$3, mobile=$4, street=$5, street_key=$6, family_votes=$7, notes=$8, updated_at=now()
+      `UPDATE voters SET name=$1, name_key=$2, serial_no=$3, mobile=$4, street=$5, street_key=$6, family_votes=$7, notes=$8,
+              door_no=$10, name_te=$11, double_vote=$12, double_vote_note=$13, roll_check=$14, updated_at=now()
        WHERE id=$9`,
-      [v.name, v.name_key, v.serial_no, v.mobile, v.street, v.street_key, v.family_votes, v.notes, id]
+      [v.name, v.name_key, v.serial_no, v.mobile, v.street, v.street_key, v.family_votes, v.notes, id, v.door_no,
+        v.name_te, v.double_vote, v.double_vote_note, v.roll_check]
     );
     if (!r.rowCount) return res.status(404).json({ error: 'Voter not found.' });
   } catch (e) {
@@ -509,6 +569,258 @@ app.get('/api/voters/:id/money-log', auth, wrap(async (req, res) => {
   res.json(rows);
 }));
 
+// ---------- voter list (official roll): suggestions, auto-fill, name checks ----------
+const REF_COLS = `r.id, r.name, r.name_te, r.serial_no, r.door_no, r.relation_type, r.relation_en, r.relation_te,
+         r.age, r.gender, r.epic, r.part_no, r.listed_twice`;
+// "verified" = a saved voter already has this serial number and this person's name.
+const REF_SELECT = `
+  SELECT ${REF_COLS},
+         (SELECT u.full_name FROM voters v LEFT JOIN users u ON u.id = v.verified_by
+          WHERE v.serial_no = r.serial_no AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te))
+          LIMIT 1) AS verified_by_name,
+         EXISTS (SELECT 1 FROM voters v WHERE v.serial_no = r.serial_no
+                 AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te))) AS verified
+  FROM reference_voters r`;
+const likeEsc = (s) => s.replace(/[\\%_]/g, '\\$&');
+
+// Suggestions while typing on the Add voter form (and the Voter list page).
+//   field=name   -> English name (any spelling), Telugu name, or voter ID
+//   field=serial -> exact serial first, then serials that start with it
+//   field=door   -> door / house numbers containing what was typed
+app.get('/api/reference/search', auth, wrap(async (req, res) => {
+  const field = ['serial', 'door'].includes(req.query.field) ? req.query.field : 'name';
+  const raw = clean(req.query.q);
+  const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit, 10) || 30));
+  if (!raw) return res.json([]);
+  let rows;
+  if (field === 'serial') {
+    const s = normSerial(raw);
+    ({ rows } = await pool.query(
+      `${REF_SELECT} WHERE r.serial_no = $1 OR r.serial_no LIKE $2
+       ORDER BY (r.serial_no = $1) DESC, length(r.serial_no), r.serial_no, r.name LIMIT ${limit}`,
+      [s, `${likeEsc(s)}%`]
+    ));
+  } else if (field === 'door') {
+    const d = raw.toLowerCase().replace(/\s+/g, '');
+    ({ rows } = await pool.query(
+      `${REF_SELECT} WHERE replace(lower(r.door_no), ' ', '') LIKE $2
+       ORDER BY (replace(lower(r.door_no), ' ', '') = $1) DESC, (replace(lower(r.door_no), ' ', '') LIKE $3) DESC,
+                r.door_no, r.serial_no LIMIT ${limit}`,
+      [d, `%${likeEsc(d)}%`, `${likeEsc(d)}%`]
+    ));
+  } else if (/[ఀ-౿]/.test(raw)) {
+    // Telugu typed: match the Telugu name as written.
+    ({ rows } = await pool.query(
+      `${REF_SELECT} WHERE r.name_te LIKE $1 ORDER BY position($2 in r.name_te), r.name_te LIMIT ${limit}`,
+      [`%${likeEsc(raw)}%`, raw]
+    ));
+  } else if (/^[a-z]{2,4}\d{3,}$/i.test(raw.replace(/\s+/g, ''))) {
+    ({ rows } = await pool.query(`${REF_SELECT} WHERE r.epic LIKE $1 ORDER BY r.epic LIMIT ${limit}`,
+      [`${likeEsc(raw.replace(/\s+/g, '').toUpperCase())}%`]));
+  } else {
+    const q = normName(raw);
+    const p = phonKey(raw);
+    if (q.length < 2) return res.json([]);
+    ({ rows } = await pool.query(
+      `${REF_SELECT}
+       WHERE r.name_norm LIKE $1 OR r.name_norm LIKE $2 OR r.name_phon LIKE $4 OR r.name_phon LIKE $5
+          OR (length($3::text) >= 3 AND $3::text <% r.name_phon)
+       ORDER BY (r.name_phon LIKE $4 OR r.name_norm LIKE $1) DESC, (r.name_phon LIKE $5 OR r.name_norm LIKE $2) DESC,
+                word_similarity($3::text, r.name_phon) DESC, r.name_phon, r.serial_no
+       LIMIT ${limit}`,
+      [`${likeEsc(q)}%`, `% ${likeEsc(q)}%`, p, `${likeEsc(p)}%`, `% ${likeEsc(p)}%`]
+    ));
+  }
+  // Same-name group size, so the screen can say "3 people named ...".
+  const groups = new Map();
+  for (const r of rows) {
+    r.group = phonKey(r.name).split(' ').sort().join(' ');
+    groups.set(r.group, (groups.get(r.group) || 0) + 1);
+  }
+  rows.forEach((r) => { r.same_name = groups.get(r.group); });
+  res.json(rows);
+}));
+
+app.get('/api/reference/stats', auth, wrap(async (req, res) => {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM reference_voters');
+  res.json({ total: rows[0].n });
+}));
+
+// Admin uploads the voter list in batches. Re-uploading is safe: a row with the
+// same name + serial is updated instead of being duplicated.
+const REF_TEXT = ['name', 'name_key', 'name_norm', 'name_phon', 'name_te', 'serial_no', 'door_no', 'relation_type',
+  'relation_en', 'relation_te', 'gender', 'epic', 'part_no'];
+app.post('/api/reference/import', auth, adminOnly, wrap(async (req, res) => {
+  const input = Array.isArray(req.body.rows) ? req.body.rows.slice(0, 2000) : [];
+  const invalid = [];
+  const byKey = new Map();
+  const yes = (x) => /^(true|yes|y|1)$/i.test(String(x ?? '').trim());
+  input.forEach((r, i) => {
+    const name = clean(r.name);
+    const serial_no = normSerial(r.serial_no);
+    const row = r.__row ?? i + 1;
+    if (name.length < 2 || name.length > 120) return invalid.push({ row, error: 'Name is missing or too long.' });
+    if (!serial_no || serial_no.length > 30) return invalid.push({ row, error: 'Serial number is missing or too long.' });
+    const age = Number.parseInt(r.age, 10);
+    const g = clean(r.gender).toUpperCase()[0] || '';
+    const name_key = nameKey(name);
+    byKey.set(`${name_key}|${serial_no}`, {
+      name, name_key, name_norm: normName(name), name_phon: phonKey(name), name_te: clean(r.name_te).slice(0, 160),
+      serial_no, door_no: clean(r.door_no).slice(0, 60), relation_type: clean(r.relation_type).slice(0, 20),
+      relation_en: clean(r.relation_en).slice(0, 160), relation_te: clean(r.relation_te).slice(0, 160),
+      age: Number.isFinite(age) && age > 0 && age < 130 ? age : null,
+      gender: ['M', 'F', 'O'].includes(g) ? g : '', epic: clean(r.epic).toUpperCase().slice(0, 20),
+      part_no: clean(r.part_no).slice(0, 20), listed_twice: yes(r.listed_twice),
+    });
+  });
+  const list = [...byKey.values()];
+  let added = 0;
+  let updated = 0;
+  if (list.length) {
+    const col = (k) => list.map((x) => x[k]);
+    const params = [...REF_TEXT.map(col), col('age'), col('listed_twice'), req.user.id];
+    const t = REF_TEXT.map((k, i) => `$${i + 1}::text[]`).join(', ');
+    const n = REF_TEXT.length;
+    const { rows } = await pool.query(
+      `INSERT INTO reference_voters (${REF_TEXT.join(', ')}, age, listed_twice, uploaded_by)
+       SELECT *, $${n + 3} FROM unnest(${t}, $${n + 1}::int[], $${n + 2}::bool[])
+       ON CONFLICT (name_key, serial_no) DO UPDATE SET
+         ${[...REF_TEXT.filter((k) => !['name_key', 'serial_no'].includes(k)), 'age', 'listed_twice'].map((k) => `${k} = EXCLUDED.${k}`).join(', ')}
+       RETURNING (xmax = 0) AS inserted`,
+      params
+    );
+    added = rows.filter((r) => r.inserted).length;
+    updated = rows.length - added;
+  }
+  res.json({ added, updated, invalid });
+}));
+
+app.delete('/api/reference', auth, adminOnly, wrap(async (req, res) => {
+  const r = await pool.query('DELETE FROM reference_voters');
+  res.json({ deleted: r.rowCount });
+}));
+
+// Lines up the voters that are already saved with the voter list, by serial
+// number. When the saved name is the same person as the list entry, the official
+// name (Telugu, and English spelled from it) replaces what was typed. Anything
+// that doesn't fit is left untouched and listed on the admin's "Check names" page.
+app.post('/api/reference/sync-names', auth, adminOnly, wrap(async (req, res) => {
+  const updated = [];
+  let mismatched = 0;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(34)');
+    const { rows: voters } = await client.query(
+      "SELECT id, name, serial_no, door_no FROM voters WHERE name_te = '' AND roll_check <> 'kept' ORDER BY id"
+    );
+    for (const v of voters) {
+      const list = await rollAt(client, v.serial_no);
+      if (!list.length) continue;
+      const hit = list.find((r) => sameName(v.name, r.name));
+      if (hit) {
+        await client.query('SAVEPOINT s');
+        try {
+          await client.query(
+            `UPDATE voters SET name = $2, name_key = $3, name_te = $4, door_no = CASE WHEN door_no = '' THEN $5 ELSE door_no END,
+                    roll_check = '', updated_at = now() WHERE id = $1`,
+            [v.id, hit.name, nameKey(hit.name), hit.name_te, hit.door_no]
+          );
+          await client.query('RELEASE SAVEPOINT s');
+          updated.push({ serial_no: v.serial_no, from: v.name, to: hit.name, name_te: hit.name_te });
+          continue;
+        } catch (e) {
+          await client.query('ROLLBACK TO SAVEPOINT s');
+          if (e.code !== '23505') throw e;
+        }
+      }
+      await client.query("UPDATE voters SET roll_check = 'mismatch' WHERE id = $1", [v.id]);
+      mismatched++;
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  res.json({ updated, mismatched });
+}));
+
+// Admin "Check names" page: saved voters whose name doesn't fit the voter list
+// at their serial number, with the list entry there and the closest names elsewhere.
+app.get('/api/reference/checks', auth, adminOnly, wrap(async (req, res) => {
+  const { rows: items } = await pool.query(`${SELECT_VOTER} WHERE v.roll_check = 'mismatch' ORDER BY v.serial_no, v.id`);
+  if (!items.length) return res.json([]);
+  const [{ rows: roll }, { rows: saved }] = await Promise.all([
+    pool.query(`SELECT ${REF_COLS}, r.name_key, r.name_phon FROM reference_voters r`),
+    pool.query('SELECT serial_no, name_key, name_te FROM voters'),
+  ]);
+  const savedKeys = new Set(saved.flatMap((s) => [`${s.serial_no}|${s.name_key}`, s.name_te ? `${s.serial_no}|te:${s.name_te}` : '']));
+  const bySerial = new Map();
+  roll.forEach((r) => {
+    r.verified = savedKeys.has(`${r.serial_no}|${r.name_key}`) || (!!r.name_te && savedKeys.has(`${r.serial_no}|te:${r.name_te}`));
+    if (!bySerial.has(r.serial_no)) bySerial.set(r.serial_no, []);
+    bySerial.get(r.serial_no).push(r);
+  });
+  for (const v of items) {
+    v.at_serial = bySerial.get(v.serial_no) || [];
+    // Cheap pre-filter: only list names sharing the start of a word with the saved name.
+    const starts = new Set(phonKey(v.name).split(' ').filter((w) => w.length >= 3).map((w) => w.slice(0, 3)));
+    v.suggestions = roll
+      .filter((r) => r.serial_no !== v.serial_no && r.name_phon.split(' ').some((w) => starts.has(w.slice(0, 3))))
+      .map((r) => ({ ...r, score: nameScore(v.name, r.name), same: sameName(v.name, r.name) }))
+      .filter((r) => r.score >= 0.55)
+      .sort((a, b) => (b.same - a.same) || (b.score - a.score))
+      .slice(0, 3);
+  }
+  res.json(items);
+}));
+
+// Resolve a name check: use a voter-list entry (at this serial, or move the voter
+// to another serial), or keep the name as typed.
+app.post('/api/voters/:id/roll-fix', auth, adminOnly, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (req.body.action === 'keep') {
+    await pool.query("UPDATE voters SET roll_check = 'kept' WHERE id = $1", [id]);
+    return res.json({ ok: true });
+  }
+  const { rows: refs } = await pool.query('SELECT * FROM reference_voters WHERE id = $1', [Number(req.body.ref_id)]);
+  const ref = refs[0];
+  if (!ref) return res.status(404).json({ error: 'That voter-list entry was not found.' });
+  const { rows: cur } = await pool.query('SELECT mobile, street, family_votes FROM voters WHERE id = $1', [id]);
+  if (!cur[0]) return res.status(404).json({ error: 'Voter not found.' });
+  const dup = await findDuplicates({
+    name_key: nameKey(ref.name), serial_no: ref.serial_no, mobile: cur[0].mobile, street_key: normStreet(cur[0].street),
+  }, { excludeId: id });
+  if (dup.level === 'exact') return res.status(409).json({ error: 'Another saved voter already is this person.', ...dup });
+  try {
+    await pool.query(
+      `UPDATE voters SET name = $2, name_key = $3, name_te = $4, serial_no = $5,
+              door_no = CASE WHEN door_no = '' THEN $6 ELSE door_no END, roll_check = '', updated_at = now()
+       WHERE id = $1`,
+      [id, ref.name, nameKey(ref.name), ref.name_te, ref.serial_no, ref.door_no]
+    );
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Another saved voter already has this name and serial number.' });
+    throw e;
+  }
+  res.json({ ok: true });
+}));
+
+// Double vote: any volunteer can mark it (with a short note on where the other vote is).
+app.post('/api/voters/:id/double', auth, wrap(async (req, res) => {
+  const on = req.body.double_vote === true;
+  const note = on ? clean(req.body.note).slice(0, 200) : '';
+  const r = await pool.query(
+    'UPDATE voters SET double_vote = $2, double_vote_note = $3, updated_at = now() WHERE id = $1',
+    [Number(req.params.id), on, note]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'Voter not found.' });
+  const { rows } = await pool.query(`${SELECT_VOTER} WHERE v.id = $1`, [Number(req.params.id)]);
+  res.json({ voter: rows[0] });
+}));
+
 // ---------- bulk upload & review queue ----------
 app.post('/api/import', auth, adminOnly, wrap(async (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows.slice(0, 1000) : [];
@@ -523,6 +835,7 @@ app.post('/api/import', auth, adminOnly, wrap(async (req, res) => {
         result.invalid.push({ row: rows[i].__row ?? i + 1, error });
         continue;
       }
+      await applyRoll(client, v);
       const dup = await findDuplicates(v, { client });
       if (dup.level === 'exact') result.already_verified++;
       else if (dup.level !== 'none') {
@@ -573,6 +886,7 @@ app.post('/api/review/:id/:action', auth, wrap(async (req, res) => {
     }
     if (action === 'accept') {
       const v = rows[0].data;
+      await applyRoll(client, v);
       const dup = await findDuplicates(v, { client });
       if (dup.level === 'exact') {
         await client.query('DELETE FROM review_queue WHERE id = $1', [id]);
@@ -594,7 +908,7 @@ app.post('/api/review/:id/:action', auth, wrap(async (req, res) => {
 
 app.get('/api/export.csv', auth, adminOnly, wrap(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT v.name, v.serial_no, v.mobile, v.street, v.family_votes, v.notes, v.verified_at,
+    `SELECT v.name, v.name_te, v.serial_no, v.door_no, v.mobile, v.double_vote, v.double_vote_note, v.street, v.family_votes, v.notes, v.verified_at,
             u.full_name AS verified_by_name, f.id AS family_id, cu.full_name AS family_created_by,
             v.money_given, mu.full_name AS money_by_name, v.money_at
      FROM voters v LEFT JOIN users u ON u.id = v.verified_by
@@ -606,9 +920,10 @@ app.get('/api/export.csv', auth, adminOnly, wrap(async (req, res) => {
   const esc = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
   const when = (d) => (d ? new Date(d).toLocaleString('en-IN', { timeZone: TZ }) : '');
   const fid = (n) => (n ? `F-${String(n).padStart(4, '0')}` : '');
-  const lines = ['Family ID,Name,Serial No,Mobile,Street,Family Votes,Notes,Verified By,Verified At,Family Created By,Money Given,Money Ticked By,Money Ticked At'];
+  const lines = ['Family ID,Name,Name (Telugu),Serial No,Door No,Mobile,Street,Family Votes,Double Vote,Double Vote Note,Notes,Verified By,Verified At,Family Created By,Money Given,Money Ticked By,Money Ticked At'];
   for (const r of rows) {
-    lines.push([fid(r.family_id), r.name, r.serial_no, r.mobile, r.street, r.family_votes, r.notes, r.verified_by_name,
+    lines.push([fid(r.family_id), r.name, r.name_te, r.serial_no, r.door_no, r.mobile, r.street, r.family_votes,
+      r.double_vote ? 'Yes' : 'No', r.double_vote_note, r.notes, r.verified_by_name,
       when(r.verified_at), r.family_created_by, r.money_given ? 'Yes' : 'No', r.money_by_name, when(r.money_at)].map(esc).join(','));
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
