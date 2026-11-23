@@ -66,8 +66,15 @@ What it powers:
   the money is for (other members still waiting can be added) and **who received it**: a family
   member or someone else typed in. A family card also has *Give money* for everyone still waiting.
   The receiver is shown on each voter, kept in the money history and cleared on *Undo*.
-- **Edit family:** change the family's mobile number, street or family votes for all members at
-  once. A mobile number used by another family is refused. The card shows who edited it last.
+- **Edit family:** anyone signed in can change the family's mobile number, street or family votes
+  for all members at once. A mobile number used by another family is refused.
+- **Family history:** every family card has *History*: who created it, who added / moved in / moved
+  out / removed members (and whether it came from an upload or the review queue), and every edit
+  with the old and new values, who made it and when.
+- **Bulk uploads:** rows of the same file that share a new mobile number form one new family. A row
+  whose number already belongs to a family (from the form or another file) is never joined
+  silently: it waits in the **Review queue** with the family shown, and the reviewer chooses *Add to
+  family*, *Use a different number* or *Discard*.
 
 ## Double vote
 

@@ -136,6 +136,25 @@ ALTER TABLE money_log ADD COLUMN IF NOT EXISTS received_by TEXT NOT NULL DEFAULT
 -- Last edit of a family's details (mobile / street / family votes).
 ALTER TABLE families ADD COLUMN IF NOT EXISTS updated_by INT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE families ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+-- Families created by a bulk upload remember it, so later rows of the SAME file
+-- join them automatically while other files must ask first.
+ALTER TABLE families ADD COLUMN IF NOT EXISTS upload_id TEXT;
+
+-- Who did what to a family, and when: created, member added / moved in / moved
+-- out / removed, details edited (with old and new values).
+CREATE TABLE IF NOT EXISTS family_log (
+  id         SERIAL PRIMARY KEY,
+  family_id  INT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  user_id    INT REFERENCES users(id) ON DELETE SET NULL,
+  action     TEXT NOT NULL,
+  detail     JSONB NOT NULL DEFAULT '{}',
+  at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS family_log_family_idx ON family_log (family_id, at DESC);
+-- Families that existed before the log: record their creation once.
+INSERT INTO family_log (family_id, user_id, action, at)
+SELECT f.id, f.created_by, 'created', f.created_at FROM families f
+WHERE NOT EXISTS (SELECT 1 FROM family_log l WHERE l.family_id = f.id AND l.action = 'created');
 
 -- Rows from a bulk upload that look like possible duplicates wait here
 -- until a volunteer decides "different person" or "duplicate".
@@ -146,6 +165,9 @@ CREATE TABLE IF NOT EXISTS review_queue (
   uploaded_by  INT REFERENCES users(id) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Why an uploaded row waits for review: 'duplicate' (looks like a saved voter)
+-- or 'family' (its mobile number already belongs to a family).
+ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT 'duplicate';
 `;
 
 async function migrate() {

@@ -257,15 +257,24 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
 // ---------- voters ----------
 // Creates the family for this mobile if it doesn't exist yet (the creator is
 // the volunteer who adds its first member). Returns { id, created }.
-async function ensureFamily(client, mobile, userId) {
+async function ensureFamily(client, mobile, userId, uploadId = null) {
   const { rows } = await client.query(
-    `INSERT INTO families (mobile, created_by) VALUES ($1, $2)
+    `INSERT INTO families (mobile, created_by, upload_id) VALUES ($1, $2, $3)
      ON CONFLICT (mobile) DO UPDATE SET mobile = EXCLUDED.mobile
      RETURNING id, (xmax = 0) AS created`,
-    [mobile, userId]
+    [mobile, userId, uploadId]
   );
   return rows[0];
 }
+
+// Family history: who did what, and when.
+async function logFamily(client, familyId, userId, action, detail = {}) {
+  if (!familyId) return;
+  await client.query('INSERT INTO family_log (family_id, user_id, action, detail) VALUES ($1, $2, $3, $4)',
+    [familyId, userId, action, detail]);
+}
+const familyIdOf = async (client, mobile) =>
+  ((await client.query('SELECT id FROM families WHERE mobile = $1', [mobile])).rows[0] || {}).id;
 
 // Voter-list entries at a serial number (normally one).
 async function rollAt(client, serial) {
@@ -298,8 +307,10 @@ async function applyRoll(client, v) {
   return { hit, list };
 }
 
-async function insertVoter(client, v, userId, reviewedIds = []) {
-  const fam = await ensureFamily(client, v.mobile, userId);
+async function insertVoter(client, v, userId, reviewedIds = [], { uploadId = null, via = '' } = {}) {
+  const fam = await ensureFamily(client, v.mobile, userId, uploadId);
+  const who = { name: v.name, serial_no: v.serial_no, ...(via ? { via } : {}) };
+  await logFamily(client, fam.id, userId, fam.created ? 'created' : 'member_added', who);
   const { rows } = await client.query(
     `INSERT INTO voters (name, name_key, serial_no, mobile, street, street_key, family_votes, notes, reviewed_matches, verified_by,
                          door_no, name_te, double_vote, double_vote_note, roll_check)
@@ -457,7 +468,15 @@ app.put('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
   if (v.roll_check === 'mismatch') v.roll_check = 'kept';
   const dup = await findDuplicates(v, { excludeId: id });
   if (dup.level === 'exact') return res.status(409).json({ error: 'Another verified voter already has these details.', ...dup });
-  await ensureFamily(pool, v.mobile, req.user.id);
+  const moved = v.mobile !== cur[0].mobile;
+  const newFam = await ensureFamily(pool, v.mobile, req.user.id);
+  if (moved) {
+    // Record the move in both families' history.
+    const who = { name: v.name, serial_no: v.serial_no };
+    await logFamily(pool, await familyIdOf(pool, cur[0].mobile), req.user.id, 'member_moved_out', { ...who, to: fidText(newFam.id) });
+    await logFamily(pool, newFam.id, req.user.id, newFam.created ? 'created' : 'member_moved_in',
+      { ...who, from: fidText(await familyIdOf(pool, cur[0].mobile)) });
+  }
   try {
     const r = await pool.query(
       `UPDATE voters SET name=$1, name_key=$2, serial_no=$3, mobile=$4, street=$5, street_key=$6, family_votes=$7, notes=$8,
@@ -475,7 +494,11 @@ app.put('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
 }));
 
 app.delete('/api/voters/:id', auth, adminOnly, wrap(async (req, res) => {
-  await pool.query('DELETE FROM voters WHERE id = $1', [Number(req.params.id)]);
+  const { rows } = await pool.query('DELETE FROM voters WHERE id = $1 RETURNING name, serial_no, mobile', [Number(req.params.id)]);
+  if (rows[0]) {
+    await logFamily(pool, await familyIdOf(pool, rows[0].mobile), req.user.id, 'member_removed',
+      { name: rows[0].name, serial_no: rows[0].serial_no });
+  }
   res.json({ ok: true });
 }));
 
@@ -660,6 +683,16 @@ app.get('/api/families/lookup', auth, wrap(async (req, res) => {
   res.json({ family: m.length === 10 ? await familyByMobile(pool, m) : null });
 }));
 
+// Full history of a family: who created it, added / moved / removed members, edited it.
+app.get('/api/families/:id(\\d+)/history', auth, wrap(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT l.action, l.detail, l.at, u.full_name AS by_name FROM family_log l
+     LEFT JOIN users u ON u.id = l.user_id WHERE l.family_id = $1 ORDER BY l.at DESC, l.id DESC LIMIT 200`,
+    [Number(req.params.id)]
+  );
+  res.json(rows);
+}));
+
 // Edit a family's shared details: mobile number, street and family votes apply to
 // every member. A mobile number already used by another family is refused.
 app.patch('/api/families/:id', auth, wrap(async (req, res) => {
@@ -674,6 +707,15 @@ app.patch('/api/families/:id', auth, wrap(async (req, res) => {
     if (!/^[6-9]\d{9}$/.test(mobile)) return { error: 'Enter a valid 10-digit mobile number.', status: 400 };
     if (street !== null && (!street || street.length > 120)) return { error: 'Please enter the street name.', status: 400 };
     if (fv !== null && !(fv >= 1 && fv <= 99)) return { error: 'Family votes must be between 1 and 99.', status: 400 };
+    // Current values, to record exactly what changed.
+    const { rows: was } = await client.query(
+      'SELECT min(street) AS street, max(family_votes)::int AS family_votes FROM voters WHERE mobile = $1', [oldMobile]
+    );
+    const changes = {};
+    if (mobile !== oldMobile) changes.mobile = { from: oldMobile, to: mobile };
+    if (street !== null && street !== (was[0].street || '')) changes.street = { from: was[0].street || '', to: street };
+    if (fv !== null && fv !== was[0].family_votes) changes.family_votes = { from: was[0].family_votes, to: fv };
+    if (!Object.keys(changes).length) return {}; // nothing changed: nothing to save or log
     if (mobile !== oldMobile) {
       const other = await familyByMobile(client, mobile);
       const { rows: taken } = await client.query('SELECT id FROM families WHERE mobile = $1', [mobile]);
@@ -691,6 +733,7 @@ app.patch('/api/families/:id', auth, wrap(async (req, res) => {
     }
     if (fv !== null) await client.query('UPDATE voters SET family_votes = $1, updated_at = now() WHERE mobile = $2', [fv, mobile]);
     await client.query('UPDATE families SET updated_by = $1, updated_at = now() WHERE id = $2', [req.user.id, id]);
+    await logFamily(client, id, req.user.id, 'edited', changes);
     return {};
   });
   if (out.error) return res.status(out.status).json(out);
@@ -953,7 +996,12 @@ app.post('/api/voters/:id/double', auth, wrap(async (req, res) => {
 // ---------- bulk upload & review queue ----------
 app.post('/api/import', auth, adminOnly, wrap(async (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows.slice(0, 1000) : [];
-  const result = { added: 0, already_verified: 0, queued: 0, invalid: [] };
+  // One id per uploaded file (sent with every batch). Rows of the same file that
+  // share a NEW mobile number form one new family together; a number that belongs
+  // to a family from anywhere else is never joined silently: the row waits in the
+  // review queue until someone decides.
+  const uploadId = /^[a-z0-9-]{8,64}$/i.test(String(req.body.upload_id || '')) ? String(req.body.upload_id) : `u-${Date.now()}`;
+  const result = { added: 0, already_verified: 0, queued: 0, family_queued: 0, invalid: [] };
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -966,14 +1014,17 @@ app.post('/api/import', auth, adminOnly, wrap(async (req, res) => {
       }
       await applyRoll(client, v);
       const dup = await findDuplicates(v, { client });
+      const { rows: fam } = await client.query('SELECT id, upload_id FROM families WHERE mobile = $1', [v.mobile]);
+      const otherFamily = fam[0] && fam[0].upload_id !== uploadId;
       if (dup.level === 'exact') result.already_verified++;
-      else if (dup.level !== 'none') {
-        await client.query('INSERT INTO review_queue (data, match_ids, uploaded_by) VALUES ($1, $2, $3)', [
-          v, dup.matches.map((m) => m.id), req.user.id,
+      else if (dup.level !== 'none' || otherFamily) {
+        await client.query('INSERT INTO review_queue (data, match_ids, uploaded_by, reason) VALUES ($1, $2, $3, $4)', [
+          v, dup.matches.map((m) => m.id), req.user.id, dup.level === 'none' ? 'family' : 'duplicate',
         ]);
+        if (dup.level === 'none') result.family_queued++;
         result.queued++;
       } else {
-        await insertVoter(client, v, req.user.id);
+        await insertVoter(client, v, req.user.id, [], { uploadId, via: 'upload' });
         result.added++;
       }
     }
@@ -989,12 +1040,14 @@ app.post('/api/import', auth, adminOnly, wrap(async (req, res) => {
 
 app.get('/api/review', auth, wrap(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT r.id, r.data, r.created_at, u.full_name AS uploaded_by_name
+    `SELECT r.id, r.data, r.created_at, r.reason, u.full_name AS uploaded_by_name
      FROM review_queue r LEFT JOIN users u ON u.id = r.uploaded_by ORDER BY r.id LIMIT 20`
   );
-  // Re-run the check so matches reflect the latest data.
+  // Re-run the checks so matches and the family that owns the mobile number are current.
   const items = [];
-  for (const r of rows) items.push({ ...r, ...(await findDuplicates(r.data)) });
+  for (const r of rows) {
+    items.push({ ...r, ...(await findDuplicates(r.data)), mobile_family: await familyByMobile(pool, r.data.mobile) });
+  }
   const { rows: c } = await pool.query('SELECT count(*)::int AS n FROM review_queue');
   res.json({ items, total: c[0].n });
 }));
@@ -1015,6 +1068,23 @@ app.post('/api/review/:id/:action', auth, wrap(async (req, res) => {
     }
     if (action === 'accept') {
       const v = rows[0].data;
+      // "Use a different number": the reviewer typed a new mobile for this voter.
+      if (req.body && req.body.mobile !== undefined) {
+        v.mobile = normMobile(req.body.mobile);
+        if (!/^[6-9]\d{9}$/.test(v.mobile)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
+        }
+      }
+      // A mobile number that belongs to a family is only used after "Add to this family".
+      const fam = await familyByMobile(client, v.mobile);
+      if (fam && !(req.body && req.body.join_family === true)) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: `This mobile number already belongs to family ${fidText(fam.id)}. Add the voter to that family, or use a different number.`,
+          family_taken: true, family: fam,
+        });
+      }
       await applyRoll(client, v);
       const dup = await findDuplicates(v, { client });
       if (dup.level === 'exact') {
@@ -1022,7 +1092,7 @@ app.post('/api/review/:id/:action', auth, wrap(async (req, res) => {
         await client.query('COMMIT');
         return res.status(409).json({ error: 'This voter was already verified - removed from the queue.' });
       }
-      await insertVoter(client, v, req.user.id, dup.matches.map((m) => m.id));
+      await insertVoter(client, v, req.user.id, dup.matches.map((m) => m.id), { via: 'review' });
     }
     await client.query('DELETE FROM review_queue WHERE id = $1', [id]);
     await client.query('COMMIT');

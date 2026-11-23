@@ -1289,6 +1289,7 @@
         </div>
         <div class="fam-foot">
           <button type="button" class="btn btn-sm btn-ghost" data-fam-edit="${f.id}">${icon('edit')}Edit family</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-fam-hist="${f.id}">${icon('clock')}History</button>
           <a class="btn btn-sm btn-ghost" href="${addMember}">${icon('plus')}Add member</a>
           <button type="button" class="btn btn-sm btn-success fam-money-btn ${pending ? '' : 'hidden'}" data-fam-money="${f.id}" data-mobile="${esc(f.mobile)}">${icon('rupee')}Give money</button>
         </div>
@@ -1372,6 +1373,39 @@
     });
   }
 
+  // Family history: everything that happened to the family, newest first, with who did it.
+  async function familyHistory(id) {
+    const log = await api('GET', `/api/families/${id}/history`).catch(fail);
+    if (!log) return;
+    const who = (d) => `<b data-nt>${esc(d.name || '')}</b>${d.serial_no ? ` <span class="muted">#<span data-nt>${esc(d.serial_no)}</span></span>` : ''}`;
+    const FIELD = { mobile: 'Mobile', street: 'Street', family_votes: 'Family votes' };
+    const val = (k, x) => esc(k === 'mobile' ? fmtMobile(String(x)) : String(x ?? '—'));
+    const ROW = {
+      created: (d) => ({ ic: 'plus', cls: 'g', text: `<span>Family created</span>${d.name ? ` <span>with</span> ${who(d)}` : ''}` }),
+      member_added: (d) => ({ ic: 'user', cls: 'g', text: `<span>Added</span> ${who(d)}${d.via === 'upload' ? ' <span class="muted">(<span>from an upload</span>)</span>' : d.via === 'review' ? ' <span class="muted">(<span>from the review queue</span>)</span>' : ''}` }),
+      member_moved_in: (d) => ({ ic: 'arrow', cls: 'b', text: `${who(d)} <span>moved in</span>${d.from ? ` <span>from</span> ${esc(d.from)}` : ''}` }),
+      member_moved_out: (d) => ({ ic: 'arrow', cls: 'y', text: `${who(d)} <span>moved out</span>${d.to ? ` <span>to</span> ${esc(d.to)}` : ''}` }),
+      member_removed: (d) => ({ ic: 'trash', cls: 'r', text: `<span>Removed</span> ${who(d)}` }),
+      edited: (d) => ({ ic: 'edit', cls: 'b', text: `<span>Family details edited</span><ul class="hist-changes">${Object.keys(d).map((k) => `
+        <li><span>${FIELD[k] || esc(k)}</span>: <s data-nt>${val(k, d[k].from)}</s> → <b data-nt>${val(k, d[k].to)}</b></li>`).join('')}</ul>` }),
+    };
+    openModal({
+      title: `Family ${fid(id)} history`,
+      sub: 'Everything that changed in this family, and who did it.',
+      body: log.length ? `<ol class="hist">${log.map((l) => {
+        const r = (ROW[l.action] || ((d) => ({ ic: 'clock', cls: '', text: esc(l.action) })))(l.detail || {});
+        return `<li><span class="hist-ico ${r.cls}">${icon(r.ic)}</span>
+          <div class="hist-body"><div>${r.text}</div>
+            <div class="hist-by"><span>by</span> <b>${esc(l.by_name || '—')}</b> · ${esc(fmtDateTime(l.at))}</div></div></li>`;
+      }).join('')}</ol>` : '<p class="muted">No changes recorded yet.</p>',
+      foot: '<button class="btn btn-primary" data-close>Close</button>',
+    });
+  }
+  document.addEventListener('click', (e) => {
+    const h = e.target.closest('[data-fam-hist]');
+    if (h) familyHistory(Number(h.dataset.famHist));
+  });
+
   // Compact description of a family (used for "this mobile already belongs to…").
   function familyBox(fam, title, text, actions = '') {
     return `<div class="fam-box-head">${icon('family')}<div><b>${title}</b>
@@ -1436,34 +1470,100 @@
 
   // ---------------------------------------------------------------- review queue
   async function viewReview(el) {
-    el.innerHTML = `<div class="page-head"><div><h1>Review queue</h1><p>Uploaded entries that look like existing voters. Decide each one.</p></div></div>
+    el.innerHTML = `<div class="page-head"><div><h1>Review queue</h1><p>Uploaded entries that need a decision: they look like a saved voter, or their mobile number already belongs to a family.</p></div></div>
       <div id="r-list"><div class="card card-pad"><div class="skeleton" style="height:180px"></div></div></div>`;
+    let items = [];
     async function load() {
       const r = await api('GET', '/api/review');
+      items = r.items;
       state.pending = r.total;
       $$('[data-pending]').forEach((b) => { b.textContent = r.total; b.classList.toggle('hidden', !r.total); });
       $('#r-list').innerHTML = r.items.length
         ? `<p class="muted" style="margin:0 0 14px">${fmtNum(r.total)} waiting${r.total > r.items.length ? ` · showing the first ${r.items.length}` : ''}</p>` +
-          r.items.map((it) => `
-            <div class="card" style="margin-bottom:16px">
-              <div class="card-head"><h3>${esc(it.data.name)}</h3><span class="muted" style="font-size:13px">Uploaded by ${esc(it.uploaded_by_name || '—')} · ${esc(timeAgo(it.created_at))}</span></div>
-              <div class="card-pad">${it.matches.length ? compareCards(it.data, it.matches) : `<div class="banner banner-green" style="margin:0">${icon('check')}No matches any more. Safe to add.</div>`}</div>
-              <div class="modal-foot">
-                <button class="btn btn-ghost" data-act="discard" data-id="${it.id}">${icon('x')}Duplicate, discard</button>
-                <button class="btn btn-primary" data-act="accept" data-id="${it.id}">${icon('check')}Different person, add</button>
+          r.items.map((it) => {
+            const f = it.mobile_family;
+            const tag = it.matches.length
+              ? `<span class="badge badge-amber">${icon('users')}Looks like a saved voter</span>` : '';
+            const famTag = f ? `<span class="badge badge-red">${icon('family')}Mobile belongs to ${fid(f.id)}</span>` : '';
+            return `
+            <div class="card review-card" style="margin-bottom:16px">
+              <div class="card-head"><div><h3 data-nt>${esc(it.data.name)}</h3>
+                <div class="review-tags">${tag}${famTag}</div></div>
+                <span class="muted" style="font-size:13px">Uploaded by ${esc(it.uploaded_by_name || '—')} · ${esc(timeAgo(it.created_at))}</span></div>
+              <div class="card-pad">
+                <div class="review-meta"><span>${icon('hash')}<span data-nt>${esc(it.data.serial_no)}</span></span>
+                  <span>${icon('phone')}${esc(fmtMobile(it.data.mobile))}</span><span>${icon('pin')}<span data-nt>${esc(it.data.street)}</span></span>
+                  <span>${icon('vote')}${esc(it.data.family_votes)} family votes</span></div>
+                ${f ? `<div class="fam-box taken" style="margin:14px 0 0">${familyBox(f, 'This mobile number already belongs to a family',
+                  'Decide whether this voter belongs to that family. If not, give them a different number.')}</div>` : ''}
+                ${it.matches.length ? `<div style="margin-top:14px">${compareCards(it.data, it.matches)}</div>`
+                  : !f ? `<div class="banner banner-green" style="margin:14px 0 0">${icon('check')}No matches any more. Safe to add.</div>` : ''}
               </div>
-            </div>`).join('')
+              <div class="modal-foot">
+                <button class="btn btn-ghost" data-act="discard" data-id="${it.id}">${icon('x')}${it.matches.length ? 'Duplicate, discard' : 'Discard'}</button>
+                ${f ? `<button class="btn btn-ghost" data-act="newmobile" data-id="${it.id}">${icon('phone')}Use a different number</button>
+                  <button class="btn btn-success" data-act="join" data-id="${it.id}">${icon('family')}${it.matches.length ? 'Different person, add to' : 'Add to'} family ${fid(f.id)}</button>`
+                  : `<button class="btn btn-primary" data-act="accept" data-id="${it.id}">${icon('check')}Different person, add</button>`}
+              </div>
+            </div>`;
+          }).join('')
         : `<div class="card">${emptyState('inbox', 'All clear', 'There are no entries waiting for review.')}</div>`;
     }
-    $('#r-list').addEventListener('click', async (e) => {
+
+    async function decide(b, body, label, doneMsg) {
+      busy(b, true, label);
+      try {
+        await api('POST', `/api/review/${b.dataset.id}/${b.dataset.act === 'discard' ? 'discard' : 'accept'}`, body);
+        toast(doneMsg);
+      } catch (er) { fail(er); }
+      closeModal();
+      load().catch(fail);
+    }
+
+    // A new mobile number for a voter who is NOT part of the family that owns the uploaded number.
+    function askNewMobile(b) {
+      const it = items.find((x) => String(x.id) === b.dataset.id);
+      const m = openModal({
+        title: 'Use a different number',
+        sub: `<b data-nt>${esc(it.data.name)}</b> <span>will be added with this number instead of</span> ${esc(fmtMobile(it.data.mobile))}.`,
+        body: `<div class="field" style="margin:0"><label for="rv-mobile">New family mobile number</label>
+            <div class="input-group"><span class="prefix">+91</span><input class="input" id="rv-mobile" inputmode="numeric" maxlength="14" placeholder="98480 12345" /></div></div>
+          <div id="rv-fam" class="hidden" style="margin-top:12px"></div>`,
+        foot: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="rv-save" disabled>${icon('check')}Add with this number</button>`,
+      });
+      const inp = $('#rv-mobile', m);
+      const box = $('#rv-fam', m);
+      let famHere = null;
+      const look = debounce(async () => {
+        const mob = inp.value.replace(/\D/g, '').slice(-10);
+        famHere = null;
+        box.className = 'hidden';
+        $('#rv-save', m).disabled = !/^[6-9]\d{9}$/.test(mob);
+        if (mob.length !== 10) return;
+        const { family } = await api('GET', `/api/families/lookup?mobile=${mob}`).catch(() => ({}));
+        if (family) {
+          famHere = family;
+          box.className = 'fam-box taken';
+          box.innerHTML = familyBox(family, 'This number also belongs to a family', `Saving will add the voter to family ${fid(family.id)}.`);
+          $('#rv-save', m).innerHTML = `${icon('family')}Add to family ${fid(family.id)}`;
+        } else $('#rv-save', m).innerHTML = `${icon('check')}Add with this number`;
+      }, 300);
+      inp.addEventListener('input', (e) => { e.target.value = e.target.value.replace(/[^\d+ ]/g, ''); look(); });
+      inp.focus();
+      $('#rv-save', m).addEventListener('click', (ev) => {
+        const btn = ev.currentTarget;
+        btn.dataset.id = b.dataset.id; btn.dataset.act = 'accept';
+        decide(btn, { mobile: inp.value, join_family: !!famHere }, 'Adding…', 'Added with the new number');
+      });
+    }
+
+    $('#r-list').addEventListener('click', (e) => {
       const b = e.target.closest('[data-act]');
       if (!b) return;
-      busy(b, true, b.dataset.act === 'accept' ? 'Adding…' : 'Discarding…');
-      try {
-        await api('POST', `/api/review/${b.dataset.id}/${b.dataset.act}`);
-        toast(b.dataset.act === 'accept' ? 'Added as a new voter' : 'Discarded as duplicate');
-      } catch (er) { fail(er); }
-      load().catch(fail);
+      if (b.dataset.act === 'discard') return decide(b, null, 'Discarding…', 'Discarded');
+      if (b.dataset.act === 'accept') return decide(b, null, 'Adding…', 'Added as a new voter');
+      if (b.dataset.act === 'join') return decide(b, { join_family: true }, 'Adding…', 'Added to the family');
+      if (b.dataset.act === 'newmobile') return askNewMobile(b);
     });
     await load();
   }
@@ -1869,13 +1969,16 @@
         const btn = e.currentTarget;
         const all = rows.map((r, i) => mapRow(r, mp, i));
         if (isRef) return uploadReference(btn, all);
-        const total = { added: 0, already_verified: 0, queued: 0, invalid: [] };
+        const total = { added: 0, already_verified: 0, queued: 0, family_queued: 0, invalid: [] };
         const BATCH = 250;
+        // Same id for every batch of this file: its rows may form new families together.
+        const uploadId = `up-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
         try {
           for (let i = 0; i < all.length; i += BATCH) {
             busy(btn, true, `Uploading… ${Math.min(i + BATCH, all.length)} / ${all.length}`);
-            const r = await api('POST', '/api/import', { rows: all.slice(i, i + BATCH) });
-            total.added += r.added; total.already_verified += r.already_verified; total.queued += r.queued; total.invalid.push(...r.invalid);
+            const r = await api('POST', '/api/import', { rows: all.slice(i, i + BATCH), upload_id: uploadId });
+            total.added += r.added; total.already_verified += r.already_verified; total.queued += r.queued;
+            total.family_queued += r.family_queued || 0; total.invalid.push(...r.invalid);
           }
         } catch (er) { fail(er); }
         busy(btn, false);
@@ -1886,7 +1989,8 @@
             <div class="result-grid">
               <div class="stat"><div class="label"><span class="ico g">${icon('check')}</span>Added</div><div class="value mono">${fmtNum(total.added)}</div></div>
               <div class="stat"><div class="label"><span class="ico b">${icon('shield')}</span>Already verified</div><div class="value mono">${fmtNum(total.already_verified)}</div><div class="hint">skipped</div></div>
-              <div class="stat"><div class="label"><span class="ico y">${icon('inbox')}</span>Needs review</div><div class="value mono">${fmtNum(total.queued)}</div></div>
+              <div class="stat"><div class="label"><span class="ico y">${icon('inbox')}</span>Needs review</div><div class="value mono">${fmtNum(total.queued)}</div>
+                ${total.family_queued ? `<div class="hint">${fmtNum(total.family_queued)} with a mobile number that already belongs to a family</div>` : ''}</div>
               <div class="stat"><div class="label"><span class="ico" style="background:var(--red-soft);color:var(--red)">${icon('alert')}</span>Invalid rows</div><div class="value mono">${fmtNum(total.invalid.length)}</div></div>
             </div>
             ${total.queued ? `<a class="btn btn-primary" href="#/review" style="margin-top:16px">${icon('inbox')}Open review queue</a>` : ''}

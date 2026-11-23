@@ -240,6 +240,22 @@
       'ఒక మొబైల్ నంబర్ = ఒక కుటుంబం. ఈ ఓటరును ఆ కుటుంబంలో చేర్చండి, లేదా కొత్త కుటుంబానికి వేరే నంబర్ ఇవ్వండి.',
     'This mobile number belongs to another family': 'ఈ మొబైల్ నంబర్ వేరే కుటుంబానిది', 'Saving will move': 'సేవ్ చేస్తే',
 
+    // family history & review queue decisions
+    'History': 'చరిత్ర', 'Everything that changed in this family, and who did it.': 'ఈ కుటుంబంలో జరిగిన ప్రతి మార్పు, ఎవరు చేశారు.',
+    'Family created': 'కుటుంబం సృష్టించబడింది', 'with': 'తో', 'Added': 'చేర్చారు', 'from an upload': 'అప్‌లోడ్ నుండి',
+    'from the review queue': 'సమీక్ష జాబితా నుండి', 'moved in': 'చేరారు', 'moved out': 'వెళ్లిపోయారు', 'from': 'నుండి',
+    'Removed': 'తొలగించారు', 'Family details edited': 'కుటుంబ వివరాలు మార్చారు', 'No changes recorded yet.': 'ఇంకా మార్పులు లేవు.',
+    'by': 'చేసినవారు',
+    'Uploaded entries that need a decision: they look like a saved voter, or their mobile number already belongs to a family.':
+      'నిర్ణయం అవసరమైన అప్‌లోడ్ ఎంట్రీలు: సేవ్ చేసిన ఓటరులా ఉన్నవి, లేదా మొబైల్ నంబర్ ఇప్పటికే ఒక కుటుంబానిది.',
+    'Looks like a saved voter': 'సేవ్ చేసిన ఓటరులా ఉంది',
+    'Decide whether this voter belongs to that family. If not, give them a different number.':
+      'ఈ ఓటరు ఆ కుటుంబానికి చెందినవారో కాదో నిర్ణయించండి. కాకపోతే వేరే నంబర్ ఇవ్వండి.',
+    'Discard': 'తీసివేయండి', 'Discarded': 'తీసివేయబడింది', 'New family mobile number': 'కొత్త కుటుంబ మొబైల్ నంబర్',
+    'will be added with this number instead of': 'ఈ నంబర్‌తో చేర్చబడతారు, బదులుగా', 'Add with this number': 'ఈ నంబర్‌తో చేర్చండి',
+    'This number also belongs to a family': 'ఈ నంబర్ కూడా ఒక కుటుంబానిది', 'Added with the new number': 'కొత్త నంబర్‌తో చేర్చబడింది',
+    'Added to the family': 'కుటుంబంలో చేర్చబడింది',
+
     // account
     'Manage your login.': 'మీ లాగిన్ వివరాలు.', 'Install the 34 Division app': '34 డివిజన్ యాప్ ఇన్‌స్టాల్ చేయండి',
     'Opens full-screen from your home screen, like a normal app.': 'సాధారణ యాప్‌లాగే హోమ్ స్క్రీన్ నుంచి తెరుచుకుంటుంది.',
@@ -284,6 +300,11 @@
     [/^Door (.+)$/, 'ఇంటి నం. $1'],
     [/^(\d+) people named$/, '$1 మంది పేరు'],
     [/^\((\d+) of (\d+)\)$/, '($1 / $2)'],
+    [/^Family (F-\d+) history$/, 'కుటుంబం $1 చరిత్ర'],
+    [/^Mobile belongs to (F-\d+)$/, 'మొబైల్ $1 కుటుంబానిది'],
+    [/^Different person, add to family (F-\d+)$/, 'వేరే వ్యక్తి, కుటుంబం $1లో చేర్చండి'],
+    [/^Saving will add the voter to family (F-\d+)\.$/, 'సేవ్ చేస్తే ఓటరు కుటుంబం $1లో చేరతారు.'],
+    [/^(\S+) with a mobile number that already belongs to a family$/, '$1 ఎంట్రీల మొబైల్ నంబర్ ఇప్పటికే ఒక కుటుంబానిది'],
     [/^Money marked for (\d+) people$/, '$1 మందికి డబ్బు గుర్తించబడింది'],
     [/^Edit family (F-\d+)$/, 'కుటుంబం $1 సవరించు'],
     [/^Members \((\d+)\)$/, 'సభ్యులు ($1)'],

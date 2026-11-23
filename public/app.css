@@ -709,3 +709,30 @@ a.avatar { text-decoration: none; }
 .money-by .recv svg { display: inline-block; vertical-align: -2px; margin-right: 3px; }
 .pick-body small { display: block; }
 .pick-body small svg { display: inline-block; vertical-align: -1px; margin-right: 2px; }
+
+/* ---------- family history ---------- */
+.hist { list-style: none; margin: 0; padding: 0; position: relative; }
+.hist::before { content: ''; position: absolute; left: 15px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+.hist > li { position: relative; display: flex; gap: 12px; padding: 8px 0; }
+.hist-changes li { display: block; overflow-wrap: anywhere; }
+.hist-changes s, .hist-changes b { white-space: nowrap; }
+.hist-ico { width: 32px; height: 32px; border-radius: 99px; display: grid; place-items: center; flex: none; background: var(--bg); color: var(--ink-2); border: 2px solid var(--surface); position: relative; }
+.hist-ico svg { width: 15px; height: 15px; }
+.hist-ico.g { background: var(--green-soft); color: var(--green); }
+.hist-ico.b { background: #E8F0FE; color: var(--blue); }
+.hist-ico.y { background: var(--amber-soft); color: var(--amber); }
+.hist-ico.r { background: var(--red-soft); color: var(--red); }
+.hist-body { min-width: 0; padding-top: 5px; font-size: 14px; }
+.hist-by { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+.hist-changes { margin: 6px 0 0; padding: 8px 12px; list-style: none; background: var(--bg); border-radius: 10px; font-size: 13px; display: grid; gap: 3px; }
+.hist-changes s { color: var(--ink-3); }
+
+/* ---------- review queue ---------- */
+.review-card .card-head { align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.review-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.review-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13.5px; color: var(--ink-2); }
+.review-meta > span { display: inline-flex; align-items: center; gap: 5px; }
+.review-meta svg { width: 14px; height: 14px; color: var(--ink-3); }
+@media (max-width: 900px) {
+  .review-card .modal-foot .btn { flex: 1 1 100%; justify-content: center; }
+}
