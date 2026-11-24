@@ -76,6 +76,22 @@ What it powers:
   silently: it waits in the **Review queue** with the family shown, and the reviewer chooses *Add to
   family*, *Use a different number* or *Discard*.
 
+## Statistics
+
+*Statistics* (sidebar, or *More* on a phone) shows the whole verification at a glance, for everyone
+signed in. Filter by **street**, **volunteer** and **date range** (quick buttons: today, last 7 / 30
+days, all time). Clicking a street or volunteer row filters to it; the filters are kept in the link,
+so a filtered view can be bookmarked or shared.
+
+- Verified voters and how much of the voter list that covers, families (voters per family), family
+  votes still to verify, streets, volunteers and active days
+- Voters verified per day (chosen range, default last 30 days) and by time of day
+- Streets and volunteers tables (sortable): voters, families, double votes, today, last activity
+- Family size, age bands and men / women (compared with the voter list)
+- Data quality with links: double votes, names to check, review queue, serials not in the voter
+  list, missing door numbers
+- *Download CSV* of the current filtered view
+
 ## Double vote
 
 Each voter has a *double vote* yes/no with an optional note on where the other vote is. Set it on

@@ -36,6 +36,7 @@
     clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
     undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
     box: '<rect x="3" y="3" width="18" height="18" rx="4"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 7v10M19 12v5"/>',
     boxcheck: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/>',
   };
   const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
@@ -145,6 +146,7 @@
 
   const routes = {
     dashboard: { title: 'Dashboard', render: viewDashboard },
+    stats: { title: 'Statistics', render: viewStats },
     add: { title: 'Add voter', render: viewAdd },
     voters: { title: 'Voters', render: viewVoters },
     roll: { title: 'Voter list', render: viewRoll },
@@ -321,6 +323,7 @@
     }
     $('#side-nav').innerHTML = `
       ${navItem('dashboard', 'home', 'Dashboard')}
+      ${navItem('stats', 'chart', 'Statistics')}
       ${navItem('add', 'plus', 'Add voter')}
       ${navItem('roll', 'search', 'Voter list')}
       ${navItem('families', 'family', 'Families')}
@@ -713,7 +716,7 @@
           <div class="hint">voters ticked · ${fmtNum(s.streets)} streets</div></a>
       </div>
       <div class="grid grid-2" style="margin-top:20px">
-        <div class="card"><div class="card-head"><h3>Verifications · last 7 days</h3><span class="badge badge-gray">${fmtNum(s.daily.reduce((a, d) => a + d.n, 0))} total</span></div>
+        <div class="card"><div class="card-head"><h3>Verifications · last 7 days</h3><a class="btn btn-sm btn-ghost" href="#/stats">${icon('chart')}All statistics</a></div>
           <div class="card-pad"><div class="chart">${s.daily.map((d) => `
             <div class="col"><div class="bar ${d.n ? '' : 'zero'}" style="height:${Math.max(3, (d.n / maxDay) * 100)}%">${d.n ? `<span>${d.n}</span>` : ''}</div><div class="day">${dayLabel(d.day)}</div></div>`).join('')}
           </div></div></div>
@@ -733,6 +736,269 @@
             : emptyState('pin', 'No streets yet', 'Streets appear as voters are added.')}
         </div>
       </div>`;
+  }
+
+  // ---------------------------------------------------------------- statistics
+  // Filters live in the address (#/stats?street=..&volunteer=..&from=..&to=..),
+  // so a filtered view can be bookmarked or shared. Changing a filter reloads
+  // the numbers in place.
+  async function viewStats(el, params) {
+    const f = { street: params.get('street') || '', volunteer: params.get('volunteer') || '', from: params.get('from') || '', to: params.get('to') || '' };
+    const sort = { streets: { key: 'voters', dir: -1 }, volunteers: { key: 'voters', dir: -1 } };
+    let data = null;
+
+    const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); };
+    const RANGES = [['today', 'Today', 0], ['7', 'Last 7 days', 6], ['30', 'Last 30 days', 29], ['all', 'All time', null]];
+    const rangeOn = (r) => (r[2] === null ? !f.from && !f.to : f.from === daysAgo(r[2]) && (!f.to || f.to === daysAgo(0)));
+    const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+    const shortDate = (d) => new Date(d + 'T00:00:00').toLocaleDateString(LOCALE(), { day: 'numeric', month: 'short' });
+
+    el.innerHTML = `
+      <div class="page-head"><div><h1>Statistics</h1><p>Progress of the verification, with filters.</p></div>
+        <button class="btn btn-ghost" id="st-csv" disabled>${icon('download')}Download CSV</button></div>
+      <div class="card st-filters">
+        <div class="toolbar">
+          <select class="select" id="st-street" aria-label="Street"><option value="">All streets</option></select>
+          <select class="select" id="st-vol" aria-label="Volunteer"><option value="">All volunteers</option></select>
+          <label class="st-date"><span>From</span><input class="input" type="date" id="st-from" value="${esc(f.from)}" /></label>
+          <label class="st-date"><span>To</span><input class="input" type="date" id="st-to" value="${esc(f.to)}" /></label>
+        </div>
+        <div class="st-ranges" id="st-ranges"></div>
+      </div>
+      <div id="st-body"><div class="grid grid-4" style="margin-top:20px">${'<div class="card stat"><div class="skeleton" style="height:70px"></div></div>'.repeat(4)}</div></div>`;
+
+    const body = $('#st-body');
+
+    function drawRanges() {
+      const active = [f.street && data && (data.options.streets.find((s) => s.key === f.street) || {}).street,
+        f.volunteer && data && (data.options.volunteers.find((v) => String(v.id) === f.volunteer) || {}).full_name].filter(Boolean);
+      $('#st-ranges').innerHTML = `
+        ${RANGES.map((r) => `<button type="button" class="chip-btn ${rangeOn(r) ? 'on' : ''}" data-range="${r[0]}">${r[1]}</button>`).join('')}
+        ${active.length || f.from || f.to ? `<span class="st-active">${active.map((a) => `<span class="badge badge-ink" data-nt>${esc(a)}</span>`).join('')}</span>
+          <button type="button" class="btn btn-sm btn-ghost" id="st-clear">${icon('x')}Clear filters</button>` : ''}`;
+    }
+
+    async function load() {
+      const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+      history.replaceState(null, '', `#/stats${qs ? '?' + qs : ''}`);
+      drawRanges();
+      body.classList.add('st-loading');
+      try { data = await api('GET', `/api/statistics${qs ? '?' + qs : ''}`); }
+      catch (e) { body.classList.remove('st-loading'); fail(e); return; }
+      if (!el.isConnected) return;
+      body.classList.remove('st-loading');
+      fillOptions();
+      drawRanges();
+      draw();
+      $('#st-csv').disabled = false;
+    }
+
+    function fillOptions() {
+      const sSel = $('#st-street'), vSel = $('#st-vol');
+      sSel.innerHTML = `<option value="">All streets</option>${data.options.streets.map((s) => `<option value="${esc(s.key)}" ${s.key === f.street ? 'selected' : ''}>${esc(s.street)}</option>`).join('')}`;
+      vSel.innerHTML = `<option value="">All volunteers</option>${data.options.volunteers.map((v) => `<option value="${v.id}" ${String(v.id) === f.volunteer ? 'selected' : ''}>${esc(v.full_name)}</option>`).join('')}`;
+      // Names and streets are data: never translate them.
+      [...sSel.options, ...vSel.options].forEach((o) => { if (o.value) o.setAttribute('data-nt', ''); });
+    }
+
+    const hbars = (rows, cls = '') => {
+      const max = Math.max(1, ...rows.map((r) => r.n));
+      return `<ul class="rank-list ${cls}">${rows.map((r) => `
+        <li><span class="name">${r.label}</span><span class="n mono">${fmtNum(r.n)}${r.sub ? ` <span class="muted" style="font-weight:500">${r.sub}</span>` : ''}</span>
+          <span class="track"><i style="width:${(r.n / max) * 100}%"></i></span></li>`).join('')}</ul>`;
+    };
+
+    function sortRows(rows, s) {
+      return [...rows].sort((a, b) => {
+        const x = a[s.key], y = b[s.key];
+        if (typeof x === 'string' || typeof y === 'string') return String(x || '').localeCompare(String(y || '')) * s.dir;
+        return ((x || 0) - (y || 0)) * s.dir;
+      });
+    }
+    const th = (table, key, label, num = true) => {
+      const s = sort[table];
+      return `<th class="sortable ${num ? 'num' : ''}" data-sort="${table}:${key}" aria-sort="${s.key === key ? (s.dir > 0 ? 'ascending' : 'descending') : 'none'}">${label}${s.key === key ? `<span class="sort-ar">${s.dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`;
+    };
+    const when = (iso) => (iso ? `<span title="${esc(fmtDateTime(iso))}">${timeAgo(iso)}</span>` : '—');
+
+    function streetTable() {
+      const rows = sortRows(data.streets, sort.streets);
+      if (!rows.length) return emptyState('pin', 'No streets', 'Nothing matches these filters.');
+      return `<div class="table-wrap"><table class="table st-table"><thead><tr>
+          ${th('streets', 'street', 'Street', false)}${th('streets', 'voters', 'Voters')}${th('streets', 'families', 'Families')}
+          ${th('streets', 'double_votes', 'Double votes')}${th('streets', 'volunteers', 'Volunteers')}${th('streets', 'last_at', 'Last added', false)}</tr></thead>
+        <tbody>${rows.map((r) => `<tr data-street="${esc(r.key)}" class="clickable" title="Show only this street">
+          <td><b data-nt>${esc(r.street)}</b></td><td class="num mono">${fmtNum(r.voters)}</td><td class="num mono">${fmtNum(r.families)}</td>
+          <td class="num mono">${r.double_votes ? `<span class="badge badge-amber">${fmtNum(r.double_votes)}</span>` : '0'}</td>
+          <td class="num mono">${fmtNum(r.volunteers)}</td><td>${when(r.last_at)}</td></tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function volunteerTable() {
+      const rows = sortRows(data.volunteers, sort.volunteers);
+      if (!rows.length) return emptyState('users', 'No volunteers', 'Nothing matches these filters.');
+      return `<div class="table-wrap"><table class="table st-table"><thead><tr>
+          ${th('volunteers', 'full_name', 'Volunteer', false)}${th('volunteers', 'voters', 'Voters')}${th('volunteers', 'families', 'Families')}
+          ${th('volunteers', 'streets', 'Streets')}${th('volunteers', 'today', 'Today')}${th('volunteers', 'days', 'Active days')}${th('volunteers', 'last_at', 'Last active', false)}</tr></thead>
+        <tbody>${rows.map((r) => `<tr data-vol="${r.id}" class="clickable" title="Show only this volunteer">
+          <td><div class="st-person"><span class="avatar sm">${esc(initials(r.full_name))}</span><b data-nt>${esc(r.full_name)}</b>${r.active ? '' : '<span class="badge badge-gray">Inactive</span>'}</div></td>
+          <td class="num mono">${fmtNum(r.voters)}</td><td class="num mono">${fmtNum(r.families)}</td><td class="num mono">${fmtNum(r.streets)}</td>
+          <td class="num mono">${r.today ? `<span class="badge badge-green">+${fmtNum(r.today)}</span>` : '0'}</td>
+          <td class="num mono">${fmtNum(r.days)}</td><td>${when(r.last_at)}</td></tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function draw() {
+      const s = data.summary;
+      const q = data.quality;
+      const dense = data.daily.length > 14;
+      const maxDay = Math.max(1, ...data.daily.map((d) => d.n));
+      const rangeTotal = data.daily.reduce((a, d) => a + d.n, 0);
+      const best = data.daily.reduce((b, d) => (d.n > b.n ? d : b), { n: 0 });
+      const labelEvery = Math.ceil(data.daily.length / 8);
+      const hourMap = Object.fromEntries(data.hours.map((h) => [h.hour, h.n]));
+      const hourRows = Array.from({ length: 24 }, (_, h) => ({ h, n: hourMap[h] || 0 }));
+      const firstH = Math.min(7, ...data.hours.map((h) => h.hour)), lastH = Math.max(21, ...data.hours.map((h) => h.hour));
+      const hours = hourRows.slice(firstH, lastH + 1);
+      const maxHour = Math.max(1, ...hours.map((h) => h.n));
+      const hourLabel = (h) => `${((h + 11) % 12) + 1}${h < 12 ? 'am' : 'pm'}`;
+      const peak = data.hours.reduce((b, h) => (h.n > b.n ? h : b), { n: 0 });
+      const avgFam = s.families ? (s.voters / s.families).toFixed(1) : '0';
+      const coverage = pct(s.in_roll, s.roll_total);
+
+      const AGE_ORDER = ['18-25', '26-35', '36-45', '46-60', '60+', 'unknown'];
+      const ageRows = AGE_ORDER.map((b) => ({ label: b === 'unknown' ? 'Not in voter list' : `${b} years`, n: (data.ages.find((a) => a.band === b) || {}).n || 0 }))
+        .filter((r) => r.n || r.label !== 'Not in voter list');
+      const G = { M: 'Men', F: 'Women', other: 'Other', unknown: 'Not in voter list' };
+      const gOf = (list, g) => (list.find((x) => x.g === g) || {}).n || 0;
+      const genderRows = ['M', 'F', 'other', 'unknown'].map((g) => ({
+        label: G[g], n: gOf(data.genders, g),
+        sub: s.roll_total && g !== 'unknown' && gOf(data.roll_genders, g) ? `/ ${fmtNum(gOf(data.roll_genders, g))} · ${pct(gOf(data.genders, g), gOf(data.roll_genders, g))}%` : '',
+      })).filter((r) => r.n || r.label === 'Men' || r.label === 'Women');
+      const sizeRows = [1, 2, 3, 4, 5, 6].map((n) => ({ label: n === 6 ? '6 or more voters' : n === 1 ? '1 voter' : `${n} voters`, n: (data.family_sizes.find((x) => x.size === n) || {}).families || 0 }));
+
+      const qItem = (ic, cls, label, n, href, hint) => `
+        <${href && n ? `a href="${href}"` : 'div'} class="q-item ${n ? cls : 'ok'}">
+          <span class="ico">${icon(n ? ic : 'check')}</span><span class="q-text"><b>${label}</b><span>${hint}</span></span>
+          <span class="q-n mono">${fmtNum(n)}</span>${href && n ? icon('arrow') : ''}</${href && n ? 'a' : 'div'}>`;
+
+      body.innerHTML = `
+        <div class="grid grid-4" style="margin-top:20px">
+          <div class="card stat feature"><div class="label"><span class="ico">${icon('shield')}</span>Verified voters</div>
+            <div class="value mono">${fmtNum(s.voters)}</div>
+            <div class="hint">${s.roll_total ? `${coverage}% of ${fmtNum(s.roll_total)} in the voter list` : `${fmtNum(s.active_days)} active days`}</div>
+            ${s.roll_total ? `<div class="st-progress"><i style="width:${Math.min(100, coverage)}%"></i></div>` : ''}</div>
+          <div class="card stat"><div class="label"><span class="ico y">${icon('family')}</span>Families</div>
+            <div class="value mono">${fmtNum(s.families)}</div><div class="hint">${avgFam} voters per family</div></div>
+          <div class="card stat"><div class="label"><span class="ico g">${icon('vote')}</span>Family votes</div>
+            <div class="value mono">${fmtNum(s.family_votes)}</div><div class="hint">${fmtNum(s.family_remaining)} not verified yet</div></div>
+          <div class="card stat"><div class="label"><span class="ico b">${icon('pin')}</span>Streets</div>
+            <div class="value mono">${fmtNum(s.streets)}</div><div class="hint">${fmtNum(s.volunteers)} volunteers · ${fmtNum(s.active_days)} days</div></div>
+        </div>
+
+        <div class="grid grid-2" style="margin-top:20px">
+          <div class="card"><div class="card-head"><h3>Verified per day</h3><span class="badge badge-gray">${shortDate(data.range.from)} – ${shortDate(data.range.to)}</span></div>
+            <div class="card-pad">
+              <div class="st-mini"><span><b class="mono">${fmtNum(rangeTotal)}</b> in this period</span><span><b class="mono">${(rangeTotal / data.daily.length).toFixed(1)}</b> per day</span>
+                ${best.n ? `<span>Best day <b>${shortDate(best.day)}</b> · <b class="mono">${fmtNum(best.n)}</b></span>` : ''}</div>
+              <div class="chart ${dense ? 'dense' : ''}">${data.daily.map((d, i) => `
+                <div class="col" title="${esc(shortDate(d.day))}: ${d.n}"><div class="bar ${d.n ? '' : 'zero'}" style="height:${Math.max(3, (d.n / maxDay) * 100)}%">${d.n && !dense ? `<span>${d.n}</span>` : ''}</div>
+                  <div class="day">${!dense || i % labelEvery === 0 || (i === data.daily.length - 1 && i % labelEvery >= labelEvery / 2) ? shortDate(d.day) : '&nbsp;'}</div></div>`).join('')}
+              </div></div></div>
+          <div class="card"><div class="card-head"><h3>Data quality</h3></div>
+            <div class="q-list">
+              ${qItem('alert', 'amber', 'Double votes', q.double_votes, '#/voters?double=1', 'Voters with a second vote elsewhere')}
+              ${q.name_checks !== null ? qItem('alert', 'red', 'Names to check', q.name_checks, '#/checks', 'Name differs from the voter list') : ''}
+              ${qItem('inbox', 'amber', 'Waiting in review', q.review_pending, '#/review', 'Uploaded rows to accept or discard')}
+              ${s.roll_total ? qItem('search', 'amber', 'Serial not in voter list', q.not_in_roll, '', 'Check the serial number') : ''}
+              ${qItem('hash', 'gray', 'No door number', q.no_door, '', 'Door number is empty')}
+            </div></div>
+        </div>
+
+        <div class="card" style="margin-top:20px"><div class="card-head"><h3>Streets</h3><span class="badge badge-gray">${fmtNum(data.streets.length)}</span></div>
+          <div id="st-streets">${streetTable()}</div></div>
+
+        <div class="card" style="margin-top:20px"><div class="card-head"><h3>Volunteers</h3><span class="badge badge-gray">${fmtNum(data.volunteers.length)}</span></div>
+          <div id="st-vols">${volunteerTable()}</div></div>
+
+        <div class="grid grid-3" style="margin-top:20px">
+          <div class="card"><div class="card-head"><h3>Family size</h3></div>
+            ${s.families ? hbars(sizeRows, 'y') : emptyState('family', 'No families', 'Nothing matches these filters.')}
+            <p class="muted st-foot">Voters verified per family (one mobile number).</p></div>
+          <div class="card"><div class="card-head"><h3>Age</h3></div>
+            ${s.voters ? hbars(ageRows) : emptyState('user', 'No voters', 'Nothing matches these filters.')}
+            <p class="muted st-foot">From the voter list.</p></div>
+          <div class="card"><div class="card-head"><h3>Men and women</h3></div>
+            ${s.voters ? hbars(genderRows, 'y') : emptyState('users', 'No voters', 'Nothing matches these filters.')}
+            ${s.roll_total ? '<p class="muted st-foot">Verified / in the voter list.</p>' : ''}</div>
+        </div>
+
+        <div class="card" style="margin-top:20px"><div class="card-head"><h3>Time of day</h3>${peak.n ? `<span class="badge badge-gray">Busiest ${hourLabel(peak.hour)}</span>` : ''}</div>
+          <div class="card-pad"><div class="chart dense hours">${hours.map((h) => `
+            <div class="col" title="${hourLabel(h.h)}: ${h.n}"><div class="bar ${h.n ? '' : 'zero'}" style="height:${Math.max(3, (h.n / maxHour) * 100)}%"></div>
+              <div class="day">${h.h % 3 === 0 ? hourLabel(h.h) : '&nbsp;'}</div></div>`).join('')}</div></div></div>`;
+    }
+
+    function toCsv() {
+      const cell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+      const line = (a) => a.map(cell).join(',');
+      const s = data.summary, q = data.quality;
+      const out = [
+        line(['34 Division statistics']),
+        line(['Street', f.street ? (data.options.streets.find((x) => x.key === f.street) || {}).street : 'All']),
+        line(['Volunteer', f.volunteer ? (data.options.volunteers.find((x) => String(x.id) === f.volunteer) || {}).full_name : 'All']),
+        line(['From', f.from || 'start']), line(['To', f.to || 'today']), '',
+        line(['Verified voters', s.voters]), line(['Families', s.families]), line(['Family votes', s.family_votes]),
+        line(['Family votes not verified yet', s.family_remaining]), line(['Streets', s.streets]), line(['Volunteers', s.volunteers]),
+        line(['In voter list', s.in_roll]), line(['Voter list total', s.roll_total]), line(['Double votes', q.double_votes]),
+        ...(q.name_checks !== null ? [line(['Names to check', q.name_checks])] : []), line(['No door number', q.no_door]), '',
+        line(['Street', 'Voters', 'Families', 'Double votes', 'Volunteers', 'Last added']),
+        ...data.streets.map((r) => line([r.street, r.voters, r.families, r.double_votes, r.volunteers, r.last_at ? new Date(r.last_at).toLocaleString('en-IN') : ''])), '',
+        line(['Volunteer', 'Voters', 'Families', 'Streets', 'Today', 'Active days', 'Last active']),
+        ...data.volunteers.map((r) => line([r.full_name, r.voters, r.families, r.streets, r.today, r.days, r.last_at ? new Date(r.last_at).toLocaleString('en-IN') : ''])), '',
+        line(['Day', 'Verified']), ...data.daily.map((d) => line([d.day, d.n])),
+      ];
+      const blob = new Blob(['﻿' + out.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `34-division-statistics-${isoDay(new Date())}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    // ----- events
+    $('#st-street').addEventListener('change', (e) => { f.street = e.target.value; load(); });
+    $('#st-vol').addEventListener('change', (e) => { f.volunteer = e.target.value; load(); });
+    $('#st-from').addEventListener('change', (e) => { f.from = e.target.value; load(); });
+    $('#st-to').addEventListener('change', (e) => { f.to = e.target.value; load(); });
+    $('#st-csv').addEventListener('click', () => data && toCsv());
+    el.addEventListener('click', (e) => {
+      const r = e.target.closest('[data-range]');
+      if (r) {
+        const def = RANGES.find((x) => x[0] === r.dataset.range);
+        f.from = def[2] === null ? '' : daysAgo(def[2]);
+        f.to = '';
+        $('#st-from').value = f.from; $('#st-to').value = '';
+        return load();
+      }
+      if (e.target.closest('#st-clear')) {
+        Object.assign(f, { street: '', volunteer: '', from: '', to: '' });
+        $('#st-from').value = ''; $('#st-to').value = '';
+        return load();
+      }
+      const h = e.target.closest('[data-sort]');
+      if (h) {
+        const [table, key] = h.dataset.sort.split(':');
+        const s = sort[table];
+        if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = ['street', 'full_name'].includes(key) ? 1 : -1; }
+        if (table === 'streets') $('#st-streets').innerHTML = streetTable(); else $('#st-vols').innerHTML = volunteerTable();
+        return;
+      }
+      const st = e.target.closest('tr[data-street]');
+      if (st) { f.street = st.dataset.street; window.scrollTo({ top: 0, behavior: 'smooth' }); return load(); }
+      const vo = e.target.closest('tr[data-vol]');
+      if (vo) { f.volunteer = vo.dataset.vol; window.scrollTo({ top: 0, behavior: 'smooth' }); return load(); }
+    });
+    await load();
   }
 
   // ---------------------------------------------------------------- add voter
@@ -2030,6 +2296,7 @@
           </div>
           <div class="card"><div class="card-head"><h3>Menu</h3></div>
             <div class="nav" style="padding:8px">
+              <a href="#/stats">${icon('chart')}<span>Statistics</span></a>
               <a href="#/roll">${icon('search')}<span>Voter list (search by name, serial, door)</span></a>
               <a href="#/families">${icon('family')}<span>Families &amp; money</span></a>
               <a href="#/voters">${icon('list')}<span>All voters</span></a>

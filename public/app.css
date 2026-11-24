@@ -736,3 +736,70 @@ a.avatar { text-decoration: none; }
 @media (max-width: 900px) {
   .review-card .modal-foot .btn { flex: 1 1 100%; justify-content: center; }
 }
+
+/* ---------------------------------------------------------------- statistics */
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.st-filters .toolbar { align-items: flex-end; }
+.st-date { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 700; color: var(--ink-3); }
+.st-date .input { width: 170px; height: 46px; }
+.st-ranges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 22px; }
+.chip-btn {
+  border: 1.5px solid var(--line); background: var(--surface); color: var(--ink-2); border-radius: 99px;
+  padding: 7px 14px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.chip-btn:hover { border-color: var(--ink-3); }
+.chip-btn.on { background: var(--ink); border-color: var(--ink); color: var(--brand); }
+.st-active { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 6px; }
+#st-clear { margin-left: auto; }
+#st-body { transition: opacity .15s; }
+#st-body.st-loading { opacity: .45; pointer-events: none; }
+.st-progress { height: 6px; border-radius: 99px; background: rgba(26,29,41,.12); margin-top: 10px; overflow: hidden; }
+.st-progress i { display: block; height: 100%; background: var(--ink); border-radius: 99px; }
+.st-mini { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-3); margin-bottom: 26px; }
+.st-mini b { color: var(--ink); }
+.chart.dense { gap: 3px; }
+.chart.dense .bar { border-radius: 4px 4px 2px 2px; }
+.chart.dense .day { font-size: 10.5px; white-space: nowrap; overflow: visible; width: 0; display: flex; justify-content: center; }
+.chart.hours { height: 120px; }
+.chart.hours .bar { background: var(--ink); }
+.chart.hours .bar.zero { background: var(--line); }
+.st-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.st-table th.sortable:hover { color: var(--ink); }
+.st-table .num { text-align: right; }
+.st-table td, .st-table th { padding-left: 16px; padding-right: 16px; }
+.st-table td:first-child, .st-table th:first-child { padding-left: 22px; }
+.sort-ar { font-size: 9px; margin-left: 4px; }
+.st-table tr.clickable { cursor: pointer; }
+.st-table tr.clickable:hover td { background: var(--brand-soft); }
+.st-person { display: flex; align-items: center; gap: 10px; }
+.avatar.sm { width: 28px; height: 28px; font-size: 11px; }
+.st-foot { font-size: 12.5px; margin: 0; padding: 0 22px 16px; }
+.q-list { padding: 8px; }
+.q-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; color: inherit; text-decoration: none; }
+a.q-item:hover { background: var(--bg); }
+.q-item .ico { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; background: var(--bg); color: var(--ink-2); }
+.q-item .ico svg { width: 17px; height: 17px; }
+.q-item.amber .ico { background: var(--amber-soft); color: var(--amber); }
+.q-item.red .ico { background: var(--red-soft); color: var(--red); }
+.q-item.ok .ico { background: var(--green-soft); color: var(--green); }
+.q-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.q-text b { font-size: 14px; }
+.q-text span { font-size: 12.5px; color: var(--ink-3); }
+.q-n { font-weight: 800; font-size: 18px; }
+.q-item > svg { width: 16px; height: 16px; color: var(--ink-3); flex: none; }
+@media (max-width: 1100px) {
+  .grid-3 { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 900px) {
+  .grid-3 { grid-template-columns: 1fr; }
+  .st-filters .toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 14px 16px; }
+  .st-date { min-width: 0; }
+  .st-filters .toolbar .select { min-width: 0; width: 100%; grid-column: 1 / -1; }
+  .st-date .input { width: 100%; min-width: 0; }
+  .st-ranges { padding: 12px 16px; }
+  .st-foot { padding: 0 16px 14px; }
+  .st-table td:first-child, .st-table th:first-child { padding-left: 16px; }
+  .st-table td, .st-table th { padding-left: 12px; padding-right: 12px; white-space: nowrap; }
+}
+.stat.feature .st-progress { background: rgba(255,255,255,.15); }
+.stat.feature .st-progress i { background: var(--brand); }

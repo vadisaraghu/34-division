@@ -254,6 +254,120 @@ app.get('/api/stats', auth, wrap(async (req, res) => {
   });
 }));
 
+// ---------- statistics (filterable) ----------
+// Filters: street (street key), volunteer (user id), from / to (YYYY-MM-DD, local
+// date the voter was verified). Every section below uses the same filters.
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+app.get('/api/statistics', auth, wrap(async (req, res) => {
+  const q = req.query;
+  const where = [];
+  const args = [];
+  const add = (sql, val) => { args.push(val); where.push(sql.replace('?', `$${args.length}`)); };
+  const day = `(v.verified_at AT TIME ZONE '${TZ}')::date`;
+  if (q.street) add('v.street_key = ?', String(q.street).slice(0, 200));
+  if (/^\d{1,9}$/.test(q.volunteer || '')) add('v.verified_by = ?', Number(q.volunteer));
+  if (ISO_DAY.test(q.from || '')) add(`${day} >= ?::date`, q.from);
+  if (ISO_DAY.test(q.to || '')) add(`${day} <= ?::date`, q.to);
+  const W = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  // The voter-list entry for a voter: same serial and same (official) name.
+  const ROLL = 'LEFT JOIN reference_voters r ON r.serial_no = v.serial_no AND r.name_key = v.name_key';
+
+  // Daily chart: the chosen range, or the last 30 days (at most 120 days shown).
+  const today = (await pool.query(`SELECT to_char((now() AT TIME ZONE '${TZ}')::date, 'YYYY-MM-DD') AS d`)).rows[0].d;
+  let to = ISO_DAY.test(q.to || '') ? q.to : today;
+  let from = ISO_DAY.test(q.from || '') ? q.from : null;
+  if (to > today) to = today;
+  if (!from || from > to) from = new Date(Date.parse(to + 'T00:00:00Z') - 29 * 864e5).toISOString().slice(0, 10);
+  if (Date.parse(to) - Date.parse(from) > 119 * 864e5) from = new Date(Date.parse(to + 'T00:00:00Z') - 119 * 864e5).toISOString().slice(0, 10);
+
+  const [summary, daily, streets, volunteers, famSizes, ages, genders, rollGender, quality, hours, options] = await Promise.all([
+    pool.query(`
+      WITH f AS (SELECT v.mobile, count(*) AS members, max(v.family_votes) AS votes FROM voters v ${W} GROUP BY v.mobile)
+      SELECT (SELECT count(*) FROM voters v ${W})::int AS voters,
+             (SELECT count(*) FROM f)::int AS families,
+             COALESCE((SELECT sum(votes) FROM f), 0)::int AS family_votes,
+             COALESCE((SELECT sum(GREATEST(votes - members, 0)) FROM f), 0)::int AS family_remaining,
+             (SELECT count(DISTINCT v.street_key) FROM voters v ${W})::int AS streets,
+             (SELECT count(DISTINCT v.verified_by) FROM voters v ${W})::int AS volunteers,
+             (SELECT count(DISTINCT ${day}) FROM voters v ${W})::int AS active_days,
+             (SELECT count(*) FROM reference_voters)::int AS roll_total,
+             (SELECT count(DISTINCT r.id) FROM voters v ${ROLL} ${W}${W ? ' AND' : ' WHERE'} r.id IS NOT NULL)::int AS in_roll`, args),
+    pool.query(`
+      SELECT to_char(d, 'YYYY-MM-DD') AS day, COALESCE(c.n, 0)::int AS n
+      FROM generate_series($${args.length + 1}::date, $${args.length + 2}::date, '1 day') d
+      LEFT JOIN (SELECT ${day} AS day, count(*) n FROM voters v ${W} GROUP BY 1) c ON c.day = d::date
+      ORDER BY d`, [...args, from, to]),
+    pool.query(`
+      SELECT v.street_key AS key, min(v.street) AS street, count(*)::int AS voters,
+             count(DISTINCT v.mobile)::int AS families,
+             count(*) FILTER (WHERE v.double_vote)::int AS double_votes,
+             count(DISTINCT v.verified_by)::int AS volunteers,
+             max(v.verified_at) AS last_at
+      FROM voters v ${W} GROUP BY v.street_key ORDER BY voters DESC, street`, args),
+    pool.query(`
+      SELECT u.id, u.full_name, u.active, count(v.id)::int AS voters,
+             count(DISTINCT v.mobile)::int AS families,
+             count(DISTINCT v.street_key)::int AS streets,
+             count(*) FILTER (WHERE ${day} = (now() AT TIME ZONE '${TZ}')::date)::int AS today,
+             count(DISTINCT ${day})::int AS days,
+             max(v.verified_at) AS last_at
+      FROM voters v JOIN users u ON u.id = v.verified_by ${W}
+      GROUP BY u.id ORDER BY voters DESC, u.full_name`, args),
+    pool.query(`
+      SELECT LEAST(members, 6)::int AS size, count(*)::int AS families
+      FROM (SELECT count(*) AS members FROM voters v ${W} GROUP BY v.mobile) f GROUP BY 1 ORDER BY 1`, args),
+    pool.query(`
+      SELECT CASE WHEN r.age IS NULL THEN 'unknown' WHEN r.age < 26 THEN '18-25' WHEN r.age < 36 THEN '26-35'
+                  WHEN r.age < 46 THEN '36-45' WHEN r.age < 61 THEN '46-60' ELSE '60+' END AS band,
+             count(*)::int AS n
+      FROM (SELECT DISTINCT ON (v.id) v.id, r.age FROM voters v ${ROLL} ${W} ORDER BY v.id, r.id) r GROUP BY 1`, args),
+    pool.query(`
+      SELECT g, count(*)::int AS n FROM (
+        SELECT DISTINCT ON (v.id) CASE WHEN upper(left(r.gender, 1)) IN ('M', 'F') THEN upper(left(r.gender, 1))
+                                       WHEN r.gender IS NULL OR r.gender = '' THEN 'unknown' ELSE 'other' END AS g
+        FROM voters v ${ROLL} ${W} ORDER BY v.id, r.id) x GROUP BY 1`, args),
+    pool.query(`
+      SELECT CASE WHEN upper(left(gender, 1)) IN ('M', 'F') THEN upper(left(gender, 1))
+                  WHEN gender = '' THEN 'unknown' ELSE 'other' END AS g, count(*)::int AS n
+      FROM reference_voters GROUP BY 1`),
+    pool.query(`
+      SELECT count(*) FILTER (WHERE v.double_vote)::int AS double_votes,
+             count(*) FILTER (WHERE v.roll_check = 'mismatch')::int AS name_checks,
+             count(*) FILTER (WHERE v.door_no = '')::int AS no_door,
+             count(*) FILTER (WHERE (SELECT count(*) FROM reference_voters) > 0
+                              AND NOT EXISTS (SELECT 1 FROM reference_voters r WHERE r.serial_no = v.serial_no))::int AS not_in_roll,
+             (SELECT count(*) FROM review_queue)::int AS review_pending
+      FROM voters v ${W}`, args),
+    pool.query(`
+      SELECT extract(hour FROM v.verified_at AT TIME ZONE '${TZ}')::int AS hour, count(*)::int AS n
+      FROM voters v ${W} GROUP BY 1 ORDER BY 1`, args),
+    Promise.all([
+      pool.query('SELECT street_key AS key, min(street) AS street FROM voters GROUP BY street_key ORDER BY min(street)'),
+      pool.query(`SELECT u.id, u.full_name FROM users u WHERE EXISTS (SELECT 1 FROM voters v WHERE v.verified_by = u.id)
+                  ORDER BY u.full_name`),
+    ]),
+  ]);
+
+  const isAdmin = req.user.role === 'admin';
+  const qual = quality.rows[0];
+  if (!isAdmin) qual.name_checks = null;
+  res.json({
+    filters: { street: q.street || '', volunteer: q.volunteer || '', from: q.from || '', to: q.to || '' },
+    range: { from, to },
+    summary: summary.rows[0],
+    daily: daily.rows,
+    hours: hours.rows,
+    streets: streets.rows,
+    volunteers: volunteers.rows,
+    family_sizes: famSizes.rows,
+    ages: ages.rows,
+    genders: genders.rows,
+    roll_genders: rollGender.rows,
+    quality: qual,
+    options: { streets: options[0].rows, volunteers: options[1].rows },
+  });
+}));
+
 // ---------- voters ----------
 // Creates the family for this mobile if it doesn't exist yet (the creator is
 // the volunteer who adds its first member). Returns { id, created }.
