@@ -92,23 +92,30 @@ so a filtered view can be bookmarked or shared.
   list, missing door numbers
 - *Download CSV* of the current filtered view
 
-## More than one vote
+## Duplicate votes in the voter list
 
-*More than one vote* (sidebar, or *More* on a phone) lists every **person** who has more than one
-vote, with all of their entries side by side (serial, voter ID, door, father/husband, age, part).
-A person is listed when:
+Duplicates are found **only in the uploaded voter list** (not from the voters volunteers add). Entries
+are the same person when:
 
-- the **same voter ID** appears more than once in the voter list,
+- the **same voter ID** appears more than once,
 - the **same name + same father's/husband's name + about the same age** (within 2 years) appears
-  more than once, usually under different voter IDs (spelling of the father's name may differ,
-  e.g. "Venkateswara Rao" / "Venkateswararao"),
-- the voter list itself marks the entry **listed twice**, or
-- a volunteer marked the verified voter as **double vote**.
+  more than once, usually under different voter IDs (the father's name may be spelled differently,
+  e.g. "Venkateswara Rao" / "Venkateswararao"), or
+- the voter list itself marks the entries **listed twice**.
 
-Search by name, Telugu name, voter ID or serial; filter by reason and by verified / not verified.
-Each entry shows whether it is verified (by whom, street, family) with *Mark double vote* (the note
-names the other serial numbers), or *Add* if it is not verified yet. *Download CSV* exports the
-current list.
+Searching **any one serial number** of such a person brings up **all** of their serial numbers
+together, everywhere:
+
+- **Add voter:** typing or picking serial 299 shows "Duplicate vote: this person is already added at
+  another serial: Serial 215, Added, by whom" (or "Not added"), so the volunteer knows before saving.
+- **Voter list:** the other entries are listed right under it with the header "Same person listed 2
+  times: serial 299, 215" and an *Also serial 215* badge on each.
+- **Voters:** saved voters show *Also serial 215* (red when that serial is added too) and there is a
+  *Duplicate in voter list* filter.
+- **More than one vote** page (sidebar, or *More* on a phone): one card per person with all entries
+  side by side (serial, voter ID, door, father/husband, age, part, added or not). Filter by reason,
+  verified / not verified / *Added more than once*; search by name, Telugu name, voter ID or serial;
+  *Mark double vote* (the note names the other serials); *Download CSV*.
 
 ## Double vote
 

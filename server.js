@@ -463,6 +463,10 @@ app.post('/api/voters/check', auth, wrap(async (req, res) => {
     const hit = typed ? list.find((r) => sameName(typed, r.name)) : null;
     roll = { entry: hit || list[0], name_matches: typed ? !!hit : null };
     if (hit) v.name_key = nameKey(hit.name); // check duplicates with the official spelling
+    // The same person's other entries in the voter list (duplicate votes).
+    const d = (await dupPartners([roll.entry.id])).get(roll.entry.id);
+    roll.entry.dups = d ? d.others : [];
+    roll.entry.dup_reasons = d ? d.reasons : [];
   }
   const dup = await findDuplicates(v, { excludeId: b.exclude_id ? Number(b.exclude_id) : null });
   // The family that already owns this mobile number, if any.
@@ -541,6 +545,12 @@ app.get('/api/voters', auth, wrap(async (req, res) => {
     where.push(`v.street_key = $${params.length}`);
   }
   if (req.query.double === '1') where.push('v.double_vote');
+  if (req.query.dup === '1') {
+    // Voters whose entry in the voter list is a duplicate (the person is listed more than once).
+    params.push([...(await dupIndex()).byId.keys()]);
+    where.push(`EXISTS (SELECT 1 FROM reference_voters r WHERE r.id = ANY($${params.length}::int[]) AND r.serial_no = v.serial_no
+                 AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te)))`);
+  }
   if (req.query.check === '1') where.push("v.roll_check = 'mismatch'");
   if (req.query.mobile) {
     params.push(normMobile(req.query.mobile));
@@ -551,6 +561,7 @@ app.get('/api/voters', auth, wrap(async (req, res) => {
     pool.query(`${SELECT_VOTER} ${whereSql} ORDER BY v.verified_at DESC LIMIT ${size} OFFSET ${(page - 1) * size}`, params),
     pool.query(`SELECT count(*)::int AS n FROM voters v LEFT JOIN families f ON f.mobile = v.mobile ${whereSql}`, params),
   ]);
+  await attachVoterDups(list.rows);
   res.json({ voters: list.rows, total: count.rows[0].n, page, pages: Math.max(1, Math.ceil(count.rows[0].n / size)) });
 }));
 
@@ -917,52 +928,65 @@ app.get('/api/reference/search', auth, wrap(async (req, res) => {
       [`${likeEsc(q)}%`, `% ${likeEsc(q)}%`, p, `${likeEsc(p)}%`, `% ${likeEsc(p)}%`]
     ));
   }
+  rows.forEach((r) => { r.group = phonKey(r.name).split(' ').sort().join(' '); });
+  // Duplicates in the voter list: every result carries the person's other
+  // serial numbers, and those entries are listed right after it, so searching
+  // any one of the serials brings all of them up together.
+  const info = await dupPartners(rows.map((r) => r.id));
+  if (info.size) {
+    const seen = new Set(rows.map((r) => r.id));
+    const extra = new Map();
+    const missing = [...new Set([...info.values()].flatMap((d) => d.others.map((o) => o.id)))].filter((id) => !seen.has(id));
+    if (missing.length) (await pool.query(`${REF_SELECT} WHERE r.id = ANY($1::int[])`, [missing])).rows.forEach((r) => extra.set(r.id, r));
+    const out = [];
+    for (const r of rows) {
+      out.push(r);
+      for (const o of (info.get(r.id) || { others: [] }).others) {
+        if (seen.has(o.id) || !extra.has(o.id)) continue;
+        seen.add(o.id);
+        out.push({ ...extra.get(o.id), group: r.group });
+      }
+    }
+    rows = out;
+    rows.forEach((r) => {
+      const d = info.get(r.id);
+      r.dups = d ? d.others : [];
+      r.dup_reasons = d ? d.reasons : [];
+    });
+  }
   // Same-name group size, so the screen can say "3 people named ...".
   const groups = new Map();
-  for (const r of rows) {
-    r.group = phonKey(r.name).split(' ').sort().join(' ');
-    groups.set(r.group, (groups.get(r.group) || 0) + 1);
-  }
+  rows.forEach((r) => groups.set(r.group, (groups.get(r.group) || 0) + 1));
   rows.forEach((r) => { r.same_name = groups.get(r.group); });
   res.json(rows);
 }));
 
-// People with more than one vote. Entries of the voter list are linked into one
-// person when they share a voter ID (EPIC), or the same name + father's/husband's
-// name + about the same age (within 2 years). Also included: entries the voter
-// list itself marks "listed twice", and verified voters a volunteer marked as
-// double vote. Small enough (a ward) to work out in memory.
+// ---------- duplicate entries in the voter list ----------
+// Entries of the uploaded voter list that are the same person: they share a
+// voter ID (EPIC), or the same name + father's/husband's name + about the same
+// age (within 2 years), or the same name + relative with both marked "listed
+// twice" by the list itself. An entry the list marks "listed twice" is included
+// even when its other entry can't be found. Worked out from the voter list only
+// (never from the voters volunteers added), in memory, cached until re-upload.
 const relKey = (r) => normName(r.relation_en || r.relation_te || '').replace(/\s+/g, '');
 const epicKey = (e) => String(e || '').replace(/\s+/g, '').toUpperCase();
-app.get('/api/multi-votes', auth, wrap(async (req, res) => {
-  const [{ rows: roll }, { rows: marked }] = await Promise.all([
-    pool.query(`
-      SELECT ${REF_COLS}, r.name_key, v.id AS voter_id, v.double_vote, v.double_vote_note, v.street,
-             f.id AS family_id, u.full_name AS verified_by_name
-      FROM reference_voters r
-      LEFT JOIN LATERAL (SELECT * FROM voters v WHERE v.serial_no = r.serial_no
-                         AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te))
-                         ORDER BY v.id LIMIT 1) v ON TRUE
-      LEFT JOIN families f ON f.mobile = v.mobile
-      LEFT JOIN users u ON u.id = v.verified_by`),
-    // Double votes marked on verified voters that are not linked to a voter-list entry.
-    pool.query(`
-      SELECT NULL::int AS id, v.name, v.name_te, v.serial_no, v.door_no, '' AS relation_type, '' AS relation_en, '' AS relation_te,
-             NULL::int AS age, '' AS gender, '' AS epic, '' AS part_no, FALSE AS listed_twice, v.name_key,
-             v.id AS voter_id, v.double_vote, v.double_vote_note, v.street, f.id AS family_id, u.full_name AS verified_by_name
-      FROM voters v LEFT JOIN families f ON f.mobile = v.mobile LEFT JOIN users u ON u.id = v.verified_by
-      WHERE v.double_vote AND NOT EXISTS (SELECT 1 FROM reference_voters r WHERE r.serial_no = v.serial_no
-                                          AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te)))`),
-  ]);
-
-  // Union-find over voter-list entries.
-  const parent = roll.map((_, i) => i);
+let dupCache = null;
+const dupReset = () => { dupCache = null; };
+async function dupIndex() {
+  if (dupCache && Date.now() - dupCache.at < 10 * 60e3) return dupCache;
+  const { rows } = await pool.query(
+    'SELECT id, name_key, relation_en, relation_te, age, epic, listed_twice FROM reference_voters ORDER BY id');
+  const parent = rows.map((_, i) => i);
   const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const why = roll.map(() => new Set());
-  const link = (a, b, reason) => { why[a].add(reason); why[b].add(reason); const x = find(a), y = find(b); if (x !== y) parent[x] = y; };
+  const why = rows.map(() => new Set());
+  const link = (a, b, reason) => {
+    why[a].add(reason); why[b].add(reason);
+    const x = find(a), y = find(b);
+    if (x !== y) parent[Math.max(x, y)] = Math.min(x, y);
+  };
   const byEpic = new Map();
   const byName = new Map();
-  roll.forEach((r, i) => {
+  rows.forEach((r, i) => {
     const e = epicKey(r.epic);
     if (e) { if (byEpic.has(e)) link(byEpic.get(e), i, 'same_id'); else byEpic.set(e, i); }
     const rk = relKey(r);
@@ -971,44 +995,102 @@ app.get('/api/multi-votes', auth, wrap(async (req, res) => {
       if (!byName.has(k)) byName.set(k, []);
       byName.get(k).push(i);
     }
+    if (r.listed_twice) why[i].add('listed_twice');
   });
   for (const list of byName.values()) {
     for (let a = 0; a < list.length; a++) {
       for (let b = a + 1; b < list.length; b++) {
-        const x = roll[list[a]], y = roll[list[b]];
+        const x = rows[list[a]], y = rows[list[b]];
         if (x.age == null || y.age == null || Math.abs(x.age - y.age) <= 2) link(list[a], list[b], 'same_name');
-        // The voter list itself marks both as listed twice: same person even if the ages were typed differently.
         else if (x.listed_twice && y.listed_twice) link(list[a], list[b], 'listed_twice');
       }
     }
   }
-  const groups = new Map();
-  roll.forEach((r, i) => {
-    if (r.listed_twice) why[i].add('listed_twice');
-    if (r.double_vote) why[i].add('marked');
+  const members = new Map();
+  rows.forEach((r, i) => {
     const g = find(i);
-    if (!groups.has(g)) groups.set(g, []);
-    groups.get(g).push(i);
+    if (!members.has(g)) members.set(g, []);
+    members.get(g).push(i);
   });
-
-  const people = [];
-  const strip = ({ name_key, ...r }) => r;
-  for (const idx of groups.values()) {
-    const reasons = new Set(idx.flatMap((i) => [...why[i]]));
-    if (idx.length < 2 && !reasons.size) continue;
-    const entries = idx.map((i) => strip(roll[i])).sort((a, b) => (Number(a.serial_no) || 0) - (Number(b.serial_no) || 0));
-    people.push({ votes: Math.max(entries.length, reasons.has('listed_twice') || reasons.has('marked') ? 2 : 1),
-      reasons: [...reasons], entries });
+  const byId = new Map();   // voter-list entry id -> group id
+  const groups = new Map(); // group id -> { ids, reasons }
+  for (const idx of members.values()) {
+    const reasons = [...new Set(idx.flatMap((i) => [...why[i]]))];
+    if (idx.length < 2 && !reasons.length) continue;
+    const gid = rows[idx[0]].id;
+    groups.set(gid, { ids: idx.map((i) => rows[i].id), reasons });
+    idx.forEach((i) => byId.set(rows[i].id, gid));
   }
-  for (const v of marked) people.push({ votes: 2, reasons: ['marked'], entries: [strip(v)] });
-  people.sort((a, b) => b.votes - a.votes || b.entries.length - a.entries.length
-    || (Number(a.entries[0].serial_no) || 0) - (Number(b.entries[0].serial_no) || 0));
+  dupCache = { at: Date.now(), byId, groups, total: rows.length };
+  return dupCache;
+}
 
+// For voter-list entry ids: the person's other entries (with whether each is
+// already added). Returns Map(id -> { reasons, others: [...] }).
+const DUP_FIELDS = ['id', 'serial_no', 'epic', 'name', 'name_te', 'door_no', 'age', 'gender', 'relation_type', 'relation_en', 'relation_te',
+  'part_no', 'verified', 'verified_by_name'];
+async function dupPartners(refIds) {
+  const out = new Map();
+  const idx = await dupIndex();
+  const need = new Set();
+  refIds.forEach((id) => { const g = idx.byId.get(id); if (g) idx.groups.get(g).ids.forEach((x) => need.add(x)); });
+  if (!need.size) return out;
+  const { rows } = await pool.query(`${REF_SELECT} WHERE r.id = ANY($1::int[])`, [[...need]]);
+  const by = new Map(rows.map((r) => [r.id, Object.fromEntries(DUP_FIELDS.map((f) => [f, r[f]]))]));
+  for (const id of need) {
+    const g = idx.groups.get(idx.byId.get(id));
+    out.set(id, { reasons: g.reasons, others: g.ids.filter((x) => x !== id).map((x) => by.get(x)).filter(Boolean) });
+  }
+  return out;
+}
+
+// Saved voter ids -> their voter-list entry id (same serial and same person).
+async function refIdsOfVoters(voterIds) {
+  if (!voterIds.length) return new Map();
+  const { rows } = await pool.query(`
+    SELECT DISTINCT ON (v.id) v.id AS vid, r.id AS rid FROM voters v
+    JOIN reference_voters r ON r.serial_no = v.serial_no AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te))
+    WHERE v.id = ANY($1::int[]) ORDER BY v.id, r.id`, [voterIds]);
+  return new Map(rows.map((r) => [r.vid, r.rid]));
+}
+
+// Adds roll_dups (the person's other entries in the voter list) to saved voters.
+async function attachVoterDups(voters) {
+  const refOf = await refIdsOfVoters(voters.map((v) => v.id));
+  const info = await dupPartners([...refOf.values()]);
+  voters.forEach((v) => {
+    const d = info.get(refOf.get(v.id));
+    v.roll_dups = d ? d.others : [];
+    v.roll_dup_reasons = d ? d.reasons : [];
+  });
+  return voters;
+}
+
+// Everyone with more than one vote in the voter list, one row per person.
+app.get('/api/multi-votes', auth, wrap(async (req, res) => {
+  const idx = await dupIndex();
+  const ids = [...idx.groups.values()].flatMap((g) => g.ids);
+  const { rows } = ids.length ? await pool.query(`
+    SELECT ${REF_COLS}, v.id AS voter_id, v.double_vote, v.double_vote_note, v.street, f.id AS family_id, u.full_name AS verified_by_name
+    FROM reference_voters r
+    LEFT JOIN LATERAL (SELECT * FROM voters v WHERE v.serial_no = r.serial_no
+                       AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te))
+                       ORDER BY v.id LIMIT 1) v ON TRUE
+    LEFT JOIN families f ON f.mobile = v.mobile
+    LEFT JOIN users u ON u.id = v.verified_by
+    WHERE r.id = ANY($1::int[])`, [ids]) : { rows: [] };
+  const by = new Map(rows.map((r) => [r.id, r]));
+  const num = (s) => Number(s) || 0;
+  const people = [...idx.groups.values()].map((g) => {
+    const entries = g.ids.map((id) => by.get(id)).filter(Boolean).sort((a, b) => num(a.serial_no) - num(b.serial_no));
+    return { votes: Math.max(entries.length, 2), reasons: g.reasons, added: entries.filter((e) => e.voter_id).length, entries };
+  }).sort((a, b) => b.votes - a.votes || num(a.entries[0].serial_no) - num(b.entries[0].serial_no));
   const count = (r) => people.filter((p) => p.reasons.includes(r)).length;
   res.json({
-    roll_total: roll.length,
+    roll_total: idx.total,
     people,
-    counts: { all: people.length, same_id: count('same_id'), same_name: count('same_name'), listed_twice: count('listed_twice'), marked: count('marked') },
+    counts: { all: people.length, same_id: count('same_id'), same_name: count('same_name'), listed_twice: count('listed_twice'),
+      added_twice: people.filter((p) => p.added > 1).length },
   });
 }));
 
@@ -1063,11 +1145,13 @@ app.post('/api/reference/import', auth, adminOnly, wrap(async (req, res) => {
     added = rows.filter((r) => r.inserted).length;
     updated = rows.length - added;
   }
+  dupReset();
   res.json({ added, updated, invalid });
 }));
 
 app.delete('/api/reference', auth, adminOnly, wrap(async (req, res) => {
   const r = await pool.query('DELETE FROM reference_voters');
+  dupReset();
   res.json({ deleted: r.rowCount });
 }));
 

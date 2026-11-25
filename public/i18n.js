@@ -44,7 +44,13 @@
 
     // more than one vote
     'More than one vote': 'ఒకటి కంటే ఎక్కువ ఓట్లు',
-    'People listed more than once in the voter list, or marked as double vote.': 'ఓటరు జాబితాలో ఒకటి కంటే ఎక్కువసార్లు ఉన్నవారు, లేదా డబుల్ ఓటుగా గుర్తించినవారు.',
+    'People listed more than once in the voter list. Search any serial number to see all of that person’s serials.':
+      'ఓటరు జాబితాలో ఒకటి కంటే ఎక్కువసార్లు ఉన్నవారు. ఏ సీరియల్ నంబర్ వెతికినా ఆ వ్యక్తి అన్ని సీరియల్స్ కనిపిస్తాయి.',
+    'Duplicate vote: this person is already added at another serial': 'డబుల్ ఓటు: ఈ వ్యక్తిని ఇప్పటికే వేరే సీరియల్‌లో చేర్చారు',
+    'Duplicate in the voter list: same person at another serial': 'ఓటరు జాబితాలో డూప్లికేట్: అదే వ్యక్తి వేరే సీరియల్‌లో ఉన్నారు',
+    'Duplicate in the voter list': 'ఓటరు జాబితాలో డూప్లికేట్', 'Duplicate in voter list': 'ఓటరు జాబితాలో డూప్లికేట్',
+    'Not added': 'చేర్చలేదు', 'Added more than once': 'ఒకటి కంటే ఎక్కువసార్లు చేర్చారు',
+    'The voter list marks this entry as listed twice.': 'ఓటరు జాబితా ఈ ఎంట్రీని రెండుసార్లు ఉన్నట్లు చూపుతోంది.',
     'Search name, Telugu name, voter ID or serial': 'పేరు, తెలుగు పేరు, ఓటరు ID లేదా సీరియల్ వెతకండి',
     'Verified or not': 'ధృవీకరించినవి / కానివి', 'Not verified yet': 'ఇంకా ధృవీకరించలేదు',
     'All': 'అన్నీ', 'Same voter ID': 'ఒకే ఓటరు ఐడీ', 'Same name, father/husband and age': 'ఒకే పేరు, తండ్రి/భర్త, వయసు',
@@ -344,6 +350,10 @@
     [/^(\d+) votes$/, '$1 ఓట్లు'],
     [/^Show more \((\S+) left\)$/, 'మరిన్ని చూపించు ($1 మిగిలాయి)'],
     [/^Part (.*)$/, 'భాగం $1'],
+    [/^Also serial (.+)$/, 'సీరియల్ $1 లో కూడా'],
+    [/^Same person listed (\d+) times: serial$/, 'ఒకే వ్యక్తి $1 సార్లు ఉన్నారు: సీరియల్'],
+    [/^\. Only one of these is a real vote\.$/, '. వీటిలో ఒక్కటే అసలైన ఓటు.'],
+    [/^Added (\d+) times$/, '$1 సార్లు చేర్చారు'],
     [/^(\d+) people named$/, '$1 మంది పేరు'],
     [/^\((\d+) of (\d+)\)$/, '($1 / $2)'],
     [/^Family (F-\d+) history$/, 'కుటుంబం $1 చరిత్ర'],

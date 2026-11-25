@@ -566,6 +566,7 @@
         <div class="body">
           <div class="top"><span class="vname">${nameHl ? `<span class="hl">${esc(v.name)}</span>` : esc(v.name)}</span>${levelBadge}
             ${v.family_id ? `<a class="fam-chip" href="#/families?q=${fid(v.family_id)}" title="Open family">${icon('family')}${fid(v.family_id)}</a>` : ''}
+            ${dupBadge(v.roll_dups, `#/multi?q=${encodeURIComponent(v.serial_no)}`)}
             ${v.double_vote && !dv ? `<span class="badge badge-amber" title="${esc(v.double_vote_note)}">${icon('alert')}Double vote</span>` : ''}
             ${v.roll_check === 'mismatch' && isAdmin() ? `<a class="badge badge-red" href="#/checks">${icon('alert')}Check name</a>` : ''}</div>
           ${v.name_te ? `<div class="te-name" lang="te" data-nt>${esc(v.name_te)}</div>` : ''}
@@ -617,6 +618,25 @@
   const ageText = (r) => [r.age ? `${r.age} yrs` : '', r.gender === 'F' ? 'Female' : r.gender === 'M' ? 'Male' : r.gender === 'O' ? 'Other' : '']
     .filter(Boolean).join(' · ');
 
+  // Duplicate votes: the same person's other entries in the voter list.
+  const dupSerials = (list) => list.map((o) => o.serial_no).join(', ');
+  const dupBadge = (dups, href) => (dups && dups.length
+    ? `<${href ? `a href="${href}"` : 'span'} class="badge ${dups.some((o) => o.verified) ? 'badge-red' : 'badge-amber'}" title="Duplicate in the voter list">${icon('copy')}<span>Also serial ${esc(dupSerials(dups))}</span></${href ? 'a' : 'span'}>`
+    : '');
+  function dupNote(r) {
+    const dups = r.dups || [];
+    if (!dups.length && !(r.dup_reasons || []).length) return '';
+    const added = dups.filter((o) => o.verified);
+    return `<div class="dup-note ${added.length ? 'red' : 'amber'}">${icon('copy')}<div class="dup-body">
+      <b>${added.length ? 'Duplicate vote: this person is already added at another serial' : 'Duplicate in the voter list: same person at another serial'}</b>
+      ${dups.length ? `<div class="dup-others">${dups.map((o) => `
+        <a class="dup-serial" href="#/multi?q=${encodeURIComponent(o.serial_no)}"><span class="ds-no">Serial <b class="mono" data-nt>${esc(o.serial_no)}</b></span>
+          ${o.epic ? `<span class="mono" data-nt>${esc(o.epic)}</span>` : ''}${o.age ? `<span>${o.age} yrs</span>` : ''}${o.door_no ? `<span>Door <span data-nt>${esc(o.door_no)}</span></span>` : ''}
+          ${o.verified ? `<span class="badge badge-red">Added</span>${o.verified_by_name ? `<span class="muted" data-nt>${esc(o.verified_by_name)}</span>` : ''}` : '<span class="badge badge-gray">Not added</span>'}</a>`).join('')}</div>`
+        : '<div class="muted">The voter list marks this entry as listed twice.</div>'}
+    </div></div>`;
+  }
+
   // Full details of one voter-list entry (used under the form and on Check names).
   const refSummary = (r) => `
     <div class="ref-sum">
@@ -629,6 +649,7 @@
         ${r.epic ? `<span>${icon('file')}<span data-nt>${esc(r.epic)}</span></span>` : ''}
         ${r.listed_twice ? '<span class="badge badge-amber">Listed twice in the voter list</span>' : ''}
       </div>
+      ${dupNote(r)}
     </div>`;
 
   // Keeps everyone with the same name together, in order of first appearance.
@@ -647,15 +668,24 @@
   // compare father's name, age and door number before choosing.
   function rollItems(items, idPrefix, { button = '' } = {}) {
     let prev = null;
+    // A group whose entries are all the same person (duplicates in the voter list).
+    const onePerson = (group) => {
+      const g = items.filter((x) => x.group === group);
+      return g.length > 1 && g.every((x) => g.every((y) => y === x || (x.dups || []).some((d) => d.id === y.id)));
+    };
     return items.map((r, i) => {
+      const same = r.same_name > 1 && r.group !== prev && onePerson(r.group);
       const head = r.same_name > 1 && r.group !== prev
-        ? `<div class="ac-group" aria-hidden="true">${icon('users')}<span>${r.same_name} people named <b data-nt>${esc(r.name)}</b>. Check father’s name, age and door number.</span></div>` : '';
+        ? (same
+          ? `<div class="ac-group dup" aria-hidden="true">${icon('copy')}<span>Same person listed ${r.same_name} times: serial <b data-nt>${esc(items.filter((x) => x.group === r.group).map((x) => x.serial_no).join(', '))}</b>. Only one of these is a real vote.</span></div>`
+          : `<div class="ac-group" aria-hidden="true">${icon('users')}<span>${r.same_name} people named <b data-nt>${esc(r.name)}</b>. Check father’s name, age and door number.</span></div>`) : '';
       prev = r.group;
       return `${head}
         <div class="ac-item${r.verified ? ' done' : ''}${r.same_name > 1 ? ' grouped' : ''}" role="option" id="${idPrefix}-${i}" data-i="${i}" data-group="${esc(r.group || '')}">
           <div class="ac-main">
             <div class="ac-name"><span data-nt>${esc(r.name)}</span>
               ${r.listed_twice ? '<span class="badge badge-amber">Listed twice</span>' : ''}
+              ${dupBadge(r.dups)}
               ${r.verified ? `<span class="badge badge-red">${icon('check')}Already verified</span>` : ''}</div>
             ${r.name_te ? `<div class="ac-te" lang="te" data-nt>${esc(r.name_te)}</div>` : ''}
             <div class="ac-rel">${[relText(r), ageText(r) ? `<span>${ageText(r)}</span>` : ''].filter(Boolean).join(' · ')}</div>
@@ -1005,14 +1035,13 @@
   }
 
   // ---------------------------------------------------------------- more than one vote
-  // People who appear more than once in the voter list (same voter ID, or same
-  // name + father/husband + age), entries the list marks "listed twice", and
-  // verified voters marked as double vote.
+  // People who appear more than once in the uploaded voter list (same voter ID,
+  // or same name + father/husband + age), and entries the list marks "listed
+  // twice". Worked out from the voter list only, not from the added voters.
   const MV_REASONS = {
     same_id: ['Same voter ID', 'badge-red'],
     same_name: ['Same name, father/husband and age', 'badge-amber'],
     listed_twice: ['Listed twice in the voter list', 'badge-amber'],
-    marked: ['Marked double vote', 'badge-ink'],
   };
   async function viewMulti(el, params) {
     const f = { reason: params.get('reason') || 'all', status: params.get('status') || '', q: params.get('q') || '' };
@@ -1020,14 +1049,15 @@
     let shown = 30;
 
     el.innerHTML = `
-      <div class="page-head"><div><h1>More than one vote</h1><p>People listed more than once in the voter list, or marked as double vote.</p></div>
+      <div class="page-head"><div><h1>More than one vote</h1><p>People listed more than once in the voter list. Search any serial number to see all of that person’s serials.</p></div>
         <button class="btn btn-ghost" id="mv-csv" disabled>${icon('download')}Download CSV</button></div>
       <div class="card">
         <div class="toolbar">
           <label class="search">${icon('search')}<input class="input" id="mv-q" type="search" value="${esc(f.q)}" placeholder="Search name, Telugu name, voter ID or serial" /></label>
           <select class="select" id="mv-status" aria-label="Verified">
             <option value="">Verified or not</option><option value="verified" ${f.status === 'verified' ? 'selected' : ''}>Verified</option>
-            <option value="not" ${f.status === 'not' ? 'selected' : ''}>Not verified yet</option></select>
+            <option value="not" ${f.status === 'not' ? 'selected' : ''}>Not verified yet</option>
+            <option value="twice" ${f.status === 'twice' ? 'selected' : ''}>Added more than once</option></select>
         </div>
         <div class="st-ranges" id="mv-reasons"></div>
       </div>
@@ -1047,6 +1077,7 @@
         if (f.reason !== 'all' && !p.reasons.includes(f.reason)) return false;
         if (f.status === 'verified' && !p.entries.some((e) => e.voter_id)) return false;
         if (f.status === 'not' && p.entries.some((e) => e.voter_id)) return false;
+        if (f.status === 'twice' && p.added < 2) return false;
         if (!q) return true;
         return p.entries.some((e) => norm(e.name).includes(q) || (e.name_te || '').includes(f.q.trim())
           || norm(e.relation_en).includes(q) || (e.epic || '').toLowerCase().replace(/\s+/g, '').includes(qId) || e.serial_no === f.q.trim());
@@ -1102,6 +1133,7 @@
           <div class="mv-head">
             <div class="mv-title"><b data-nt>${esc(p.entries[0].name)}</b>${p.entries[0].name_te ? ` <span class="te" lang="te" data-nt>${esc(p.entries[0].name_te)}</span>` : ''}</div>
             <span class="badge badge-red mv-votes">${p.votes} votes</span>
+            ${p.added > 1 ? `<span class="badge badge-ink">${icon('alert')}Added ${p.added} times</span>` : ''}
             <div class="chips mv-why">${p.reasons.map((r) => `<span class="badge ${MV_REASONS[r][1]}">${MV_REASONS[r][0]}</span>`).join('')}</div>
           </div>
           ${p.entries.map((e) => entryRow(e, p)).join('')}
@@ -1137,11 +1169,10 @@
         try {
           await api('POST', `/api/voters/${m.dataset.mark}/double`, { double_vote: true, note: m.dataset.note });
           data.people.forEach((p) => p.entries.forEach((x) => {
-            if (String(x.voter_id) === m.dataset.mark) { x.double_vote = true; x.double_vote_note = m.dataset.note; if (!p.reasons.includes('marked')) p.reasons.push('marked'); }
+            if (String(x.voter_id) === m.dataset.mark) { x.double_vote = true; x.double_vote_note = m.dataset.note; }
           }));
-          data.counts.marked = data.people.filter((p) => p.reasons.includes('marked')).length;
           toast('Marked as double vote');
-          drawReasons(); draw();
+          draw();
         } catch (er) { busy(m, false); fail(er); }
       }
     });
@@ -1563,7 +1594,7 @@
   // ---------------------------------------------------------------- voters list
   async function viewVoters(el, params) {
     const q = { q: params.get('q') || '', street: params.get('street') || '', mobile: params.get('mobile') || '', page: 1,
-      double: params.get('double') === '1' ? '1' : '' };
+      double: params.get('double') === '1' ? '1' : '', dup: params.get('dup') === '1' ? '1' : '' };
     el.innerHTML = `
       <div class="page-head"><div><h1>Voters</h1><p id="count-line">Loading…</p></div>
         <div style="display:flex;gap:10px">${isAdmin() ? `<a class="btn btn-ghost" href="/api/export.csv">${icon('download')}Export</a>` : ''}
@@ -1576,6 +1607,7 @@
           <label class="search">${icon('search')}<input class="input" id="v-q" placeholder="Search name, serial, family ID, mobile or street" value="${esc(q.q)}" type="search" /></label>
           <select class="select" id="v-street"><option value="">All streets</option></select>
           <label class="check filter-check"><input type="checkbox" id="v-double" ${q.double ? 'checked' : ''} />Double votes only</label>
+          <label class="check filter-check"><input type="checkbox" id="v-dup" ${q.dup ? 'checked' : ''} />Duplicate in voter list</label>
         </div>
         <div id="v-list"><div class="card-pad"><div class="skeleton" style="height:200px"></div></div></div>
         <div class="list-foot" id="v-foot"></div>
@@ -1588,9 +1620,9 @@
     });
 
     async function load() {
-      const usp = new URLSearchParams({ q: q.q, street: q.street, mobile: q.mobile, page: q.page, double: q.double });
+      const usp = new URLSearchParams({ q: q.q, street: q.street, mobile: q.mobile, page: q.page, double: q.double, dup: q.dup });
       const r = await api('GET', `/api/voters?${usp}`);
-      $('#count-line').textContent = `${fmtNum(r.total)} verified voter${r.total === 1 ? '' : 's'}${q.q || q.street || q.mobile || q.double ? ' match your filters' : ''}`;
+      $('#count-line').textContent = `${fmtNum(r.total)} verified voter${r.total === 1 ? '' : 's'}${q.q || q.street || q.mobile || q.double || q.dup ? ' match your filters' : ''}`;
       const acts = (v) => `
         <button class="icon-btn" data-family="${esc(v.mobile)}" title="Show family">${icon('family')}</button>
         ${isAdmin() ? `<button class="icon-btn" data-edit="${v.id}" title="Edit">${icon('edit')}</button>
@@ -1608,6 +1640,7 @@
     $('#v-q').addEventListener('input', debounce((e) => { q.q = e.target.value.trim(); q.page = 1; load().catch(fail); }, 300));
     $('#v-street').addEventListener('change', (e) => { q.street = e.target.value; q.page = 1; load().catch(fail); });
     $('#v-double').addEventListener('change', (e) => { q.double = e.target.checked ? '1' : ''; q.page = 1; load().catch(fail); });
+    $('#v-dup').addEventListener('change', (e) => { q.dup = e.target.checked ? '1' : ''; q.page = 1; load().catch(fail); });
     $('#v-foot').addEventListener('click', (e) => {
       const b = e.target.closest('[data-page]');
       if (b) { q.page = Number(b.dataset.page); load().catch(fail); window.scrollTo({ top: 0, behavior: 'smooth' }); }
