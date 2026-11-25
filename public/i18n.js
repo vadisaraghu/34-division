@@ -42,6 +42,19 @@
     'Show only this street': 'ఈ వీధి మాత్రమే చూపించు', 'Show only this volunteer': 'ఈ వాలంటీర్‌వి మాత్రమే చూపించు',
     '1 voter': '1 ఓటరు', '6 or more voters': '6 లేదా ఎక్కువ ఓటర్లు',
 
+    // more than one vote
+    'More than one vote': 'ఒకటి కంటే ఎక్కువ ఓట్లు',
+    'People listed more than once in the voter list, or marked as double vote.': 'ఓటరు జాబితాలో ఒకటి కంటే ఎక్కువసార్లు ఉన్నవారు, లేదా డబుల్ ఓటుగా గుర్తించినవారు.',
+    'Search name, Telugu name, voter ID or serial': 'పేరు, తెలుగు పేరు, ఓటరు ID లేదా సీరియల్ వెతకండి',
+    'Verified or not': 'ధృవీకరించినవి / కానివి', 'Not verified yet': 'ఇంకా ధృవీకరించలేదు',
+    'All': 'అన్నీ', 'Same voter ID': 'ఒకే ఓటరు ఐడీ', 'Same name, father/husband and age': 'ఒకే పేరు, తండ్రి/భర్త, వయసు',
+    'Marked double vote': 'డబుల్ ఓటుగా గుర్తించారు',
+    'Part': 'భాగం', 'Mark double vote': 'డబుల్ ఓటుగా గుర్తించు', 'Marked as double vote': 'డబుల్ ఓటుగా గుర్తించబడింది',
+    'people': 'మంది', 'votes': 'ఓట్లు', 'voter list:': 'ఓటరు జాబితా:', 'Nobody found': 'ఎవరూ దొరకలేదు',
+    'No one with more than one vote matches this search.': 'ఈ వెతుకులాటకు సరిపోయే ఎక్కువ ఓట్లు ఉన్నవారు లేరు.',
+    'No one has more than one vote here.': 'ఇక్కడ ఎవరికీ ఒకటి కంటే ఎక్కువ ఓట్లు లేవు.',
+    'The voter list isn’t uploaded yet': 'ఓటరు జాబితా ఇంకా అప్‌లోడ్ కాలేదు', 'Duplicates are found in the voter list.': 'నకిలీలు ఓటరు జాబితాలో వెతకబడతాయి.',
+
     // login / setup / sign-up
     'Every voter.': 'ప్రతి ఓటరు.', 'Counted once.': 'ఒక్కసారే లెక్క.',
     'Verify families street by street. Duplicates are caught automatically before they are saved.':
@@ -328,6 +341,9 @@
     [/^(\d+) voters$/, '$1 ఓటర్లు'],
     [/^(\S+) years$/, '$1 ఏళ్లు'],
     [/^Busiest (\S+)$/, 'ఎక్కువ పని $1'],
+    [/^(\d+) votes$/, '$1 ఓట్లు'],
+    [/^Show more \((\S+) left\)$/, 'మరిన్ని చూపించు ($1 మిగిలాయి)'],
+    [/^Part (.*)$/, 'భాగం $1'],
     [/^(\d+) people named$/, '$1 మంది పేరు'],
     [/^\((\d+) of (\d+)\)$/, '($1 / $2)'],
     [/^Family (F-\d+) history$/, 'కుటుంబం $1 చరిత్ర'],

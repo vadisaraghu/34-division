@@ -927,6 +927,91 @@ app.get('/api/reference/search', auth, wrap(async (req, res) => {
   res.json(rows);
 }));
 
+// People with more than one vote. Entries of the voter list are linked into one
+// person when they share a voter ID (EPIC), or the same name + father's/husband's
+// name + about the same age (within 2 years). Also included: entries the voter
+// list itself marks "listed twice", and verified voters a volunteer marked as
+// double vote. Small enough (a ward) to work out in memory.
+const relKey = (r) => normName(r.relation_en || r.relation_te || '').replace(/\s+/g, '');
+const epicKey = (e) => String(e || '').replace(/\s+/g, '').toUpperCase();
+app.get('/api/multi-votes', auth, wrap(async (req, res) => {
+  const [{ rows: roll }, { rows: marked }] = await Promise.all([
+    pool.query(`
+      SELECT ${REF_COLS}, r.name_key, v.id AS voter_id, v.double_vote, v.double_vote_note, v.street,
+             f.id AS family_id, u.full_name AS verified_by_name
+      FROM reference_voters r
+      LEFT JOIN LATERAL (SELECT * FROM voters v WHERE v.serial_no = r.serial_no
+                         AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te))
+                         ORDER BY v.id LIMIT 1) v ON TRUE
+      LEFT JOIN families f ON f.mobile = v.mobile
+      LEFT JOIN users u ON u.id = v.verified_by`),
+    // Double votes marked on verified voters that are not linked to a voter-list entry.
+    pool.query(`
+      SELECT NULL::int AS id, v.name, v.name_te, v.serial_no, v.door_no, '' AS relation_type, '' AS relation_en, '' AS relation_te,
+             NULL::int AS age, '' AS gender, '' AS epic, '' AS part_no, FALSE AS listed_twice, v.name_key,
+             v.id AS voter_id, v.double_vote, v.double_vote_note, v.street, f.id AS family_id, u.full_name AS verified_by_name
+      FROM voters v LEFT JOIN families f ON f.mobile = v.mobile LEFT JOIN users u ON u.id = v.verified_by
+      WHERE v.double_vote AND NOT EXISTS (SELECT 1 FROM reference_voters r WHERE r.serial_no = v.serial_no
+                                          AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te)))`),
+  ]);
+
+  // Union-find over voter-list entries.
+  const parent = roll.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const why = roll.map(() => new Set());
+  const link = (a, b, reason) => { why[a].add(reason); why[b].add(reason); const x = find(a), y = find(b); if (x !== y) parent[x] = y; };
+  const byEpic = new Map();
+  const byName = new Map();
+  roll.forEach((r, i) => {
+    const e = epicKey(r.epic);
+    if (e) { if (byEpic.has(e)) link(byEpic.get(e), i, 'same_id'); else byEpic.set(e, i); }
+    const rk = relKey(r);
+    if (rk) {
+      const k = `${r.name_key}|${rk}`;
+      if (!byName.has(k)) byName.set(k, []);
+      byName.get(k).push(i);
+    }
+  });
+  for (const list of byName.values()) {
+    for (let a = 0; a < list.length; a++) {
+      for (let b = a + 1; b < list.length; b++) {
+        const x = roll[list[a]], y = roll[list[b]];
+        if (x.age == null || y.age == null || Math.abs(x.age - y.age) <= 2) link(list[a], list[b], 'same_name');
+        // The voter list itself marks both as listed twice: same person even if the ages were typed differently.
+        else if (x.listed_twice && y.listed_twice) link(list[a], list[b], 'listed_twice');
+      }
+    }
+  }
+  const groups = new Map();
+  roll.forEach((r, i) => {
+    if (r.listed_twice) why[i].add('listed_twice');
+    if (r.double_vote) why[i].add('marked');
+    const g = find(i);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(i);
+  });
+
+  const people = [];
+  const strip = ({ name_key, ...r }) => r;
+  for (const idx of groups.values()) {
+    const reasons = new Set(idx.flatMap((i) => [...why[i]]));
+    if (idx.length < 2 && !reasons.size) continue;
+    const entries = idx.map((i) => strip(roll[i])).sort((a, b) => (Number(a.serial_no) || 0) - (Number(b.serial_no) || 0));
+    people.push({ votes: Math.max(entries.length, reasons.has('listed_twice') || reasons.has('marked') ? 2 : 1),
+      reasons: [...reasons], entries });
+  }
+  for (const v of marked) people.push({ votes: 2, reasons: ['marked'], entries: [strip(v)] });
+  people.sort((a, b) => b.votes - a.votes || b.entries.length - a.entries.length
+    || (Number(a.entries[0].serial_no) || 0) - (Number(b.entries[0].serial_no) || 0));
+
+  const count = (r) => people.filter((p) => p.reasons.includes(r)).length;
+  res.json({
+    roll_total: roll.length,
+    people,
+    counts: { all: people.length, same_id: count('same_id'), same_name: count('same_name'), listed_twice: count('listed_twice'), marked: count('marked') },
+  });
+}));
+
 app.get('/api/reference/stats', auth, wrap(async (req, res) => {
   const { rows } = await pool.query('SELECT count(*)::int AS n FROM reference_voters');
   res.json({ total: rows[0].n });

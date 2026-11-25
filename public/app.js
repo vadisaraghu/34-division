@@ -37,6 +37,7 @@
     undo: '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
     box: '<rect x="3" y="3" width="18" height="18" rx="4"/>',
     chart: '<path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 7v10M19 12v5"/>',
+    copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
     boxcheck: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/>',
   };
   const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
@@ -150,6 +151,7 @@
     add: { title: 'Add voter', render: viewAdd },
     voters: { title: 'Voters', render: viewVoters },
     roll: { title: 'Voter list', render: viewRoll },
+    multi: { title: 'More than one vote', render: viewMulti },
     checks: { title: 'Check names', render: viewChecks, admin: true },
     families: { title: 'Families', render: viewFamilies },
     review: { title: 'Review', render: viewReview },
@@ -326,6 +328,7 @@
       ${navItem('stats', 'chart', 'Statistics')}
       ${navItem('add', 'plus', 'Add voter')}
       ${navItem('roll', 'search', 'Voter list')}
+      ${navItem('multi', 'copy', 'More than one vote')}
       ${navItem('families', 'family', 'Families')}
       ${navItem('voters', 'list', 'Voters')}
       ${navItem('review', 'inbox', 'Review queue', pendingBadge)}
@@ -999,6 +1002,156 @@
       if (vo) { f.volunteer = vo.dataset.vol; window.scrollTo({ top: 0, behavior: 'smooth' }); return load(); }
     });
     await load();
+  }
+
+  // ---------------------------------------------------------------- more than one vote
+  // People who appear more than once in the voter list (same voter ID, or same
+  // name + father/husband + age), entries the list marks "listed twice", and
+  // verified voters marked as double vote.
+  const MV_REASONS = {
+    same_id: ['Same voter ID', 'badge-red'],
+    same_name: ['Same name, father/husband and age', 'badge-amber'],
+    listed_twice: ['Listed twice in the voter list', 'badge-amber'],
+    marked: ['Marked double vote', 'badge-ink'],
+  };
+  async function viewMulti(el, params) {
+    const f = { reason: params.get('reason') || 'all', status: params.get('status') || '', q: params.get('q') || '' };
+    let data = null;
+    let shown = 30;
+
+    el.innerHTML = `
+      <div class="page-head"><div><h1>More than one vote</h1><p>People listed more than once in the voter list, or marked as double vote.</p></div>
+        <button class="btn btn-ghost" id="mv-csv" disabled>${icon('download')}Download CSV</button></div>
+      <div class="card">
+        <div class="toolbar">
+          <label class="search">${icon('search')}<input class="input" id="mv-q" type="search" value="${esc(f.q)}" placeholder="Search name, Telugu name, voter ID or serial" /></label>
+          <select class="select" id="mv-status" aria-label="Verified">
+            <option value="">Verified or not</option><option value="verified" ${f.status === 'verified' ? 'selected' : ''}>Verified</option>
+            <option value="not" ${f.status === 'not' ? 'selected' : ''}>Not verified yet</option></select>
+        </div>
+        <div class="st-ranges" id="mv-reasons"></div>
+      </div>
+      <div id="mv-sum" class="mv-sum"></div>
+      <div id="mv-list"><div class="card card-pad" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></div></div>`;
+
+    const keep = () => {
+      const qs = new URLSearchParams(Object.entries(f).filter(([k, v]) => v && !(k === 'reason' && v === 'all'))).toString();
+      history.replaceState(null, '', `#/multi${qs ? '?' + qs : ''}`);
+    };
+    const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+    function filtered() {
+      const q = norm(f.q);
+      const qId = q.replace(/\s+/g, '');
+      return data.people.filter((p) => {
+        if (f.reason !== 'all' && !p.reasons.includes(f.reason)) return false;
+        if (f.status === 'verified' && !p.entries.some((e) => e.voter_id)) return false;
+        if (f.status === 'not' && p.entries.some((e) => e.voter_id)) return false;
+        if (!q) return true;
+        return p.entries.some((e) => norm(e.name).includes(q) || (e.name_te || '').includes(f.q.trim())
+          || norm(e.relation_en).includes(q) || (e.epic || '').toLowerCase().replace(/\s+/g, '').includes(qId) || e.serial_no === f.q.trim());
+      });
+    }
+
+    function drawReasons() {
+      const c = data.counts;
+      $('#mv-reasons').innerHTML = [['all', 'All', c.all], ...Object.entries(MV_REASONS).map(([k, [label]]) => [k, label, c[k]])]
+        .map(([k, label, n]) => `<button type="button" class="chip-btn ${f.reason === k ? 'on' : ''}" data-reason="${k}">${label} <span class="mono">${fmtNum(n)}</span></button>`).join('');
+    }
+
+    const entryRow = (e, p) => {
+      const others = p.entries.filter((x) => x !== e).map((x) => x.serial_no);
+      return `
+      <div class="mv-entry">
+        <div class="mv-cells">
+          <div class="ac-cell"><small>Serial</small><b class="mono" data-nt>${esc(e.serial_no)}</b></div>
+          <div class="ac-cell"><small>Voter ID</small><b class="mono" data-nt>${esc(e.epic || '—')}</b></div>
+          <div class="ac-cell"><small>Door</small><b class="mono" data-nt>${esc(e.door_no || '—')}</b></div>
+        </div>
+        <div class="mv-who">
+          <div><b data-nt>${esc(e.name)}</b>${e.name_te ? ` <span class="te" lang="te" data-nt>${esc(e.name_te)}</span>` : ''}</div>
+          <div class="ac-rel">${[relText(e), ageText(e) ? `<span>${ageText(e)}</span>` : '', e.part_no ? `<span>Part <span data-nt>${esc(e.part_no)}</span></span>` : ''].filter(Boolean).join(' · ')}</div>
+        </div>
+        <div class="mv-status">
+          ${e.voter_id ? `
+            <span class="badge badge-green">${icon('check')}Verified</span>
+            <span class="muted mv-by"><span data-nt>${esc(e.verified_by_name || '')}</span>${e.street ? ` · <span data-nt>${esc(e.street)}</span>` : ''}</span>
+            ${e.family_id ? `<a class="btn btn-sm btn-ghost" href="#/families?q=${encodeURIComponent(fid(e.family_id))}">${icon('family')}<span data-nt>${fid(e.family_id)}</span></a>` : ''}
+            ${e.double_vote
+              ? `<span class="dv-chip on">${icon('alert')}Double vote${e.double_vote_note ? ` <em data-nt>${esc(e.double_vote_note)}</em>` : ''}</span>`
+              : `<button class="btn btn-sm btn-ghost" data-mark="${e.voter_id}" data-note="${esc(others.length ? `Also serial ${others.join(', ')}` : '')}">${icon('alert')}Mark double vote</button>`}`
+            : `<span class="badge badge-gray">Not verified yet</span>
+               <a class="btn btn-sm btn-brand" href="#/add?serial=${encodeURIComponent(e.serial_no)}">${icon('plus')}Add</a>`}
+        </div>
+      </div>`;
+    };
+
+    function draw() {
+      const list = filtered();
+      const votes = list.reduce((a, p) => a + p.votes, 0);
+      $('#mv-sum').innerHTML = data.roll_total || data.people.length
+        ? `<b class="mono">${fmtNum(list.length)}</b> <span>people</span> · <b class="mono">${fmtNum(votes)}</b> <span>votes</span>${data.roll_total ? ` · <span class="muted">voter list:</span> <b class="mono">${fmtNum(data.roll_total)}</b>` : ''}` : '';
+      if (!data.roll_total && !data.people.length) {
+        $('#mv-list').innerHTML = `<div class="card" style="margin-top:16px">${emptyState('list', 'The voter list isn’t uploaded yet', 'Duplicates are found in the voter list.',
+          isAdmin() ? `<a class="btn btn-brand" href="#/upload?type=reference" style="margin-top:12px">${icon('upload')}Upload voter list</a>` : '')}</div>`;
+        return;
+      }
+      if (!list.length) { $('#mv-list').innerHTML = `<div class="card" style="margin-top:16px">${emptyState('check', 'Nobody found', f.q ? 'No one with more than one vote matches this search.' : 'No one has more than one vote here.')}</div>`; return; }
+      $('#mv-list').innerHTML = list.slice(0, shown).map((p) => `
+        <div class="card mv-card">
+          <div class="mv-head">
+            <div class="mv-title"><b data-nt>${esc(p.entries[0].name)}</b>${p.entries[0].name_te ? ` <span class="te" lang="te" data-nt>${esc(p.entries[0].name_te)}</span>` : ''}</div>
+            <span class="badge badge-red mv-votes">${p.votes} votes</span>
+            <div class="chips mv-why">${p.reasons.map((r) => `<span class="badge ${MV_REASONS[r][1]}">${MV_REASONS[r][0]}</span>`).join('')}</div>
+          </div>
+          ${p.entries.map((e) => entryRow(e, p)).join('')}
+        </div>`).join('')
+        + (list.length > shown ? `<button class="btn btn-ghost btn-block" id="mv-more" style="margin-top:16px">Show more (${fmtNum(list.length - shown)} left)</button>` : '');
+    }
+
+    function toCsv() {
+      const cell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+      const rows = [['Person', 'Votes', 'Why', 'Serial', 'Voter ID', 'Name', 'Name (Telugu)', 'Father/Husband', 'Age', 'Gender', 'Door No', 'Part', 'Verified', 'Verified by', 'Street', 'Family', 'Double vote', 'Note']];
+      filtered().forEach((p, n) => p.entries.forEach((e) => rows.push([n + 1, p.votes, p.reasons.map((r) => MV_REASONS[r][0]).join('; '),
+        e.serial_no, e.epic, e.name, e.name_te, e.relation_en || e.relation_te, e.age ?? '', e.gender, e.door_no, e.part_no,
+        e.voter_id ? 'Yes' : 'No', e.verified_by_name || '', e.street || '', e.family_id ? fid(e.family_id) : '', e.double_vote ? 'Yes' : '', e.double_vote_note || ''])));
+      const blob = new Blob(['﻿' + rows.map((r) => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `34-division-more-than-one-vote-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    const redraw = () => { shown = 30; keep(); draw(); };
+    $('#mv-q').addEventListener('input', debounce((e) => { f.q = e.target.value; redraw(); }, 200));
+    $('#mv-status').addEventListener('change', (e) => { f.status = e.target.value; redraw(); });
+    $('#mv-csv').addEventListener('click', () => data && toCsv());
+    el.addEventListener('click', async (e) => {
+      const r = e.target.closest('[data-reason]');
+      if (r) { f.reason = r.dataset.reason; drawReasons(); return redraw(); }
+      if (e.target.closest('#mv-more')) { shown += 30; return draw(); }
+      const m = e.target.closest('[data-mark]');
+      if (m) {
+        busy(m, true, 'Saving…');
+        try {
+          await api('POST', `/api/voters/${m.dataset.mark}/double`, { double_vote: true, note: m.dataset.note });
+          data.people.forEach((p) => p.entries.forEach((x) => {
+            if (String(x.voter_id) === m.dataset.mark) { x.double_vote = true; x.double_vote_note = m.dataset.note; if (!p.reasons.includes('marked')) p.reasons.push('marked'); }
+          }));
+          data.counts.marked = data.people.filter((p) => p.reasons.includes('marked')).length;
+          toast('Marked as double vote');
+          drawReasons(); draw();
+        } catch (er) { busy(m, false); fail(er); }
+      }
+    });
+
+    data = await api('GET', '/api/multi-votes');
+    if (!el.isConnected) return;
+    if (f.reason !== 'all' && !MV_REASONS[f.reason]) f.reason = 'all';
+    drawReasons();
+    draw();
+    $('#mv-csv').disabled = !data.people.length;
   }
 
   // ---------------------------------------------------------------- add voter
@@ -2300,6 +2453,7 @@
               <a href="#/roll">${icon('search')}<span>Voter list (search by name, serial, door)</span></a>
               <a href="#/families">${icon('family')}<span>Families &amp; money</span></a>
               <a href="#/voters">${icon('list')}<span>All voters</span></a>
+              <a href="#/multi">${icon('copy')}<span>More than one vote</span></a>
               <a href="#/voters?double=1">${icon('alert')}<span>Double votes</span></a>
               <a href="#/review">${icon('inbox')}<span>Review queue</span><span class="badge badge-red ${state.pending ? '' : 'hidden'}" data-pending>${state.pending}</span></a>
             </div></div>

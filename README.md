@@ -92,6 +92,24 @@ so a filtered view can be bookmarked or shared.
   list, missing door numbers
 - *Download CSV* of the current filtered view
 
+## More than one vote
+
+*More than one vote* (sidebar, or *More* on a phone) lists every **person** who has more than one
+vote, with all of their entries side by side (serial, voter ID, door, father/husband, age, part).
+A person is listed when:
+
+- the **same voter ID** appears more than once in the voter list,
+- the **same name + same father's/husband's name + about the same age** (within 2 years) appears
+  more than once, usually under different voter IDs (spelling of the father's name may differ,
+  e.g. "Venkateswara Rao" / "Venkateswararao"),
+- the voter list itself marks the entry **listed twice**, or
+- a volunteer marked the verified voter as **double vote**.
+
+Search by name, Telugu name, voter ID or serial; filter by reason and by verified / not verified.
+Each entry shows whether it is verified (by whom, street, family) with *Mark double vote* (the note
+names the other serial numbers), or *Add* if it is not verified yet. *Download CSV* exports the
+current list.
+
 ## Double vote
 
 Each voter has a *double vote* yes/no with an optional note on where the other vote is. Set it on

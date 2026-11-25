@@ -803,3 +803,25 @@ a.q-item:hover { background: var(--bg); }
 }
 .stat.feature .st-progress { background: rgba(255,255,255,.15); }
 .stat.feature .st-progress i { background: var(--brand); }
+
+/* ---------------------------------------------------------------- more than one vote */
+.mv-sum { margin: 16px 2px 0; font-size: 14px; color: var(--ink-2); }
+.mv-card { margin-top: 16px; overflow: hidden; }
+.mv-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 14px 22px; border-bottom: 1px solid var(--line); background: #FBFBFD; }
+.mv-title { font-size: 16px; min-width: 0; overflow-wrap: anywhere; }
+.mv-votes { font-size: 12.5px; }
+.mv-why { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+.mv-entry { display: grid; grid-template-columns: minmax(250px, auto) minmax(220px, 1fr) minmax(0, auto); gap: 10px 20px; align-items: center; padding: 14px 22px; border-top: 1px solid var(--line); }
+.mv-head + .mv-entry { border-top: 0; }
+.mv-cells { display: grid; grid-template-columns: 60px 110px 80px; gap: 12px; }
+.mv-cells small { font-size: 11px; color: var(--ink-3); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.mv-cells b { font-size: 14px; overflow-wrap: anywhere; }
+.mv-who { min-width: 0; font-size: 14px; }
+.mv-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 8px; max-width: 380px; }
+.mv-by { font-size: 12.5px; }
+@media (max-width: 900px) {
+  .mv-head { padding: 12px 16px; }
+  .mv-entry { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; }
+  .mv-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mv-status { justify-content: flex-start; }
+}
