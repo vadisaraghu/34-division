@@ -122,8 +122,8 @@ together, everywhere:
 ### Check by hand
 
 The second tab on *More than one vote* lists **possible duplicates to check by hand**: entries with
-the **same name, the same father's/husband's name and about the same age** (within 2 years), or the
-same name and relative with both marked *listed twice* by the list. One row per person with all of
+the **same name and the same father's/husband's name**, whatever the age (ages in the list can be
+wrong). One row per person with all of
 their **serial numbers beside the name** (green = already added), hints (*Duplicate*, *Same house*,
 *Same father/husband*, *Similar age*, *Listed twice*, *Added more than once*) that are also filters,
 and a tap to compare the entries side by side (voter ID, father / husband, age, door, part, added by

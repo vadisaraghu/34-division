@@ -55,8 +55,8 @@
     'Verified or not': 'ధృవీకరించినవి / కానివి', 'Not verified yet': 'ఇంకా ధృవీకరించలేదు',
     'All': 'అన్నీ', 'Same voter ID': 'ఒకే ఓటరు ఐడీ', 'Same name and house number': 'ఒకే పేరు, ఒకే ఇంటి నంబర్',
     'Duplicates': 'డూప్లికేట్లు', 'Check by hand': 'చేతితో తనిఖీ',
-    'Same name, same father/husband and about the same age (within 2 years), with their serial numbers. Check them by hand so nobody is missed.':
-      'ఒకే పేరు, ఒకే తండ్రి/భర్త, దాదాపు ఒకే వయసు (2 ఏళ్ల లోపు), వారి సీరియల్ నంబర్లతో. ఎవరూ తప్పిపోకుండా చేతితో తనిఖీ చేయండి.',
+    'Same name and same father/husband (any age), with their serial numbers. Check them by hand so nobody is missed.':
+      'ఒకే పేరు, ఒకే తండ్రి/భర్త (వయసు ఏదైనా), వారి సీరియల్ నంబర్లతో. ఎవరూ తప్పిపోకుండా చేతితో తనిఖీ చేయండి.',
     'Same house': 'ఒకే ఇల్లు', 'Same father/husband': 'ఒకే తండ్రి/భర్త', 'Similar age': 'దాదాపు ఒకే వయసు',
     'No other match': 'ఇంకేమీ సరిపోలలేదు', 'Duplicate': 'డూప్లికేట్', 'names': 'పేర్లు', 'entries': 'ఎంట్రీలు',
     'tap a name to compare': 'పోల్చడానికి పేరుపై నొక్కండి', 'Father/Husband': 'తండ్రి/భర్త',

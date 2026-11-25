@@ -1049,8 +1049,8 @@
       <a role="tab" href="#/multi?tab=names" class="${active === 'names' ? 'on' : ''}" aria-selected="${active === 'names'}">${icon('users')}Check by hand</a>
     </div>`;
 
-  // Possible duplicates for checking by hand: same name + same father/husband +
-  // about the same age, with their serial numbers side by side.
+  // Possible duplicates for checking by hand: same name + same father/husband
+  // (any age), with their serial numbers side by side.
   const SN_HINTS = {
     same_id: ['Same voter ID', 'badge-red'],
     same_house: ['Same house', 'badge-red'],
@@ -1065,7 +1065,7 @@
     let shown = 60;
     const open = new Set();
     el.innerHTML = `
-      <div class="page-head"><div><h1>More than one vote</h1><p>Same name, same father/husband and about the same age (within 2 years), with their serial numbers. Check them by hand so nobody is missed.</p></div>
+      <div class="page-head"><div><h1>More than one vote</h1><p>Same name and same father/husband (any age), with their serial numbers. Check them by hand so nobody is missed.</p></div>
         <button class="btn btn-ghost" id="sn-csv" disabled>${icon('download')}Download CSV</button></div>
       ${mvTabs('names')}
       <div class="card">
