@@ -972,7 +972,7 @@ app.get('/api/reference/search', auth, wrap(async (req, res) => {
 const epicKey = (e) => String(e || '').replace(/\s+/g, '').toUpperCase();
 const doorKey = (d) => String(d || '').toUpperCase().replace(/[^0-9A-Zఀ-౿]/g, '');
 let dupCache = null;
-const dupReset = () => { dupCache = null; };
+const dupReset = () => { dupCache = null; nameDupCache = null; };
 async function dupIndex() {
   if (dupCache && Date.now() - dupCache.at < 10 * 60e3) return dupCache;
   const { rows } = await pool.query(
@@ -1057,6 +1057,70 @@ async function attachVoterDups(voters) {
   });
   return voters;
 }
+
+// Same name in the voter list, for checking by hand: a deliberately wide net so
+// nobody is missed. Entries share a name when the English name matches in any
+// word order or with/without spaces ("Durgaprasad" = "Durga Prasad"), or the
+// Telugu name matches. Each group gets hints (same house / voter ID / father,
+// similar age, listed twice) so the likeliest are checked first.
+let nameDupCache = null;
+async function nameGroups() {
+  if (nameDupCache && Date.now() - nameDupCache.at < 10 * 60e3) return nameDupCache;
+  const { rows } = await pool.query('SELECT id, name, name_key, name_te FROM reference_voters ORDER BY id');
+  const parent = rows.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const seen = new Map();
+  const once = (key, i) => {
+    if (!seen.has(key)) { seen.set(key, i); return; }
+    const x = find(seen.get(key)), y = find(i);
+    if (x !== y) parent[Math.max(x, y)] = Math.min(x, y);
+  };
+  rows.forEach((r, i) => {
+    if (r.name_key) once(`k|${r.name_key}`, i);
+    const flat = normName(r.name).replace(/\s+/g, '');
+    if (flat.length >= 4) once(`f|${flat}`, i);
+    const te = String(r.name_te || '').replace(/\s+/g, '');
+    if (te) once(`t|${te}`, i);
+  });
+  const members = new Map();
+  rows.forEach((r, i) => { const g = find(i); if (!members.has(g)) members.set(g, []); members.get(g).push(rows[i].id); });
+  nameDupCache = { at: Date.now(), groups: [...members.values()].filter((ids) => ids.length > 1), total: rows.length };
+  return nameDupCache;
+}
+
+app.get('/api/same-names', auth, wrap(async (req, res) => {
+  const { groups, total } = await nameGroups();
+  const ids = groups.flat();
+  const { rows } = ids.length ? await pool.query(`
+    SELECT ${REF_COLS}, v.id AS voter_id, u.full_name AS verified_by_name
+    FROM reference_voters r
+    LEFT JOIN LATERAL (SELECT * FROM voters v WHERE v.serial_no = r.serial_no
+                       AND (v.name_key = r.name_key OR (v.name_te <> '' AND v.name_te = r.name_te))
+                       ORDER BY v.id LIMIT 1) v ON TRUE
+    LEFT JOIN users u ON u.id = v.verified_by
+    WHERE r.id = ANY($1::int[])`, [ids]) : { rows: [] };
+  const by = new Map(rows.map((r) => [r.id, r]));
+  const num = (s) => Number(s) || 0;
+  const strict = await dupIndex();
+  const pairs = (list, same) => list.some((a, i) => list.some((b, j) => j > i && same(a, b)));
+  const out = groups.map((g) => {
+    const entries = g.map((id) => by.get(id)).filter(Boolean).sort((a, b) => num(a.serial_no) - num(b.serial_no));
+    const hints = [];
+    if (pairs(entries, (a, b) => epicKey(a.epic) && epicKey(a.epic) === epicKey(b.epic))) hints.push('same_id');
+    if (pairs(entries, (a, b) => doorKey(a.door_no) && doorKey(a.door_no) === doorKey(b.door_no))) hints.push('same_house');
+    const rel = (e) => normName(e.relation_en || e.relation_te || '').replace(/\s+/g, '');
+    if (pairs(entries, (a, b) => rel(a) && rel(a) === rel(b))) hints.push('same_father');
+    if (pairs(entries, (a, b) => a.age != null && b.age != null && Math.abs(a.age - b.age) <= 2)) hints.push('close_age');
+    if (entries.some((e) => e.listed_twice)) hints.push('listed_twice');
+    if (entries.filter((e) => e.voter_id).length > 1) hints.push('added_twice');
+    return { name: entries[0].name, name_te: entries[0].name_te, count: entries.length,
+      duplicate: entries.some((e) => strict.byId.has(e.id)), hints, entries };
+  });
+  const W = { same_id: 8, same_house: 6, same_father: 4, close_age: 2, listed_twice: 3, added_twice: 5 };
+  const score = (g) => g.hints.reduce((a, h) => a + W[h], 0);
+  out.sort((a, b) => score(b) - score(a) || b.count - a.count || a.name.localeCompare(b.name));
+  res.json({ roll_total: total, groups: out, entries: out.reduce((a, g) => a + g.count, 0) });
+}));
 
 // Everyone with more than one vote in the voter list, one row per person.
 app.get('/api/multi-votes', auth, wrap(async (req, res) => {

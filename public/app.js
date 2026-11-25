@@ -1043,7 +1043,131 @@
     same_house: ['Same name and house number', 'badge-amber'],
     listed_twice: ['Listed twice in the voter list', 'badge-amber'],
   };
+  const mvTabs = (active) => `
+    <div class="seg-tabs" role="tablist">
+      <a role="tab" href="#/multi" class="${active === 'dup' ? 'on' : ''}" aria-selected="${active === 'dup'}">${icon('copy')}Duplicates</a>
+      <a role="tab" href="#/multi?tab=names" class="${active === 'names' ? 'on' : ''}" aria-selected="${active === 'names'}">${icon('users')}Same name · check by hand</a>
+    </div>`;
+
+  // Everyone in the voter list who shares a name with someone else, with their
+  // serial numbers side by side, for checking by hand (wider than Duplicates).
+  const SN_HINTS = {
+    same_id: ['Same voter ID', 'badge-red'],
+    same_house: ['Same house', 'badge-red'],
+    added_twice: ['Added more than once', 'badge-ink'],
+    same_father: ['Same father/husband', 'badge-amber'],
+    listed_twice: ['Listed twice', 'badge-amber'],
+    close_age: ['Similar age', 'badge-gray'],
+  };
+  async function viewSameNames(el, params) {
+    const f = { q: params.get('q') || '', hint: params.get('hint') || '' };
+    let data = null;
+    let shown = 60;
+    const open = new Set();
+    el.innerHTML = `
+      <div class="page-head"><div><h1>More than one vote</h1><p>Everyone in the voter list who shares a name with someone else, with their serial numbers. Check them by hand so nobody is missed.</p></div>
+        <button class="btn btn-ghost" id="sn-csv" disabled>${icon('download')}Download CSV</button></div>
+      ${mvTabs('names')}
+      <div class="card">
+        <div class="toolbar">
+          <label class="search">${icon('search')}<input class="input" id="sn-q" type="search" value="${esc(f.q)}" placeholder="Search name, Telugu name, voter ID or serial" /></label>
+        </div>
+        <div class="st-ranges" id="sn-hints"></div>
+      </div>
+      <div id="sn-sum" class="mv-sum"></div>
+      <div id="sn-list"><div class="card card-pad" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></div></div>`;
+
+    const keep = () => {
+      const qs = new URLSearchParams(Object.entries({ tab: 'names', ...f }).filter(([, v]) => v)).toString();
+      history.replaceState(null, '', `#/multi?${qs}`);
+    };
+    const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    function filtered() {
+      const q = norm(f.q), qId = q.replace(/\s+/g, ''), raw = f.q.trim();
+      return data.groups.filter((g) => {
+        if (f.hint === 'none' ? g.hints.length : f.hint && !g.hints.includes(f.hint)) return false;
+        if (!q) return true;
+        if (/^\d+$/.test(raw)) return g.entries.some((e) => e.serial_no === raw); // a number = a serial number
+        return g.entries.some((e) => norm(e.name).includes(q) || (e.name_te || '').includes(raw)
+          || (e.epic || '').toLowerCase().includes(qId));
+      });
+    }
+    function drawHints() {
+      const n = (h) => data.groups.filter((g) => (h === 'none' ? !g.hints.length : g.hints.includes(h))).length;
+      $('#sn-hints').innerHTML = [['', 'All', data.groups.length], ...Object.entries(SN_HINTS).map(([k, [l]]) => [k, l, n(k)]), ['none', 'No other match', n('none')]]
+        .map(([k, l, c]) => `<button type="button" class="chip-btn ${f.hint === k ? 'on' : ''}" data-hint="${k}">${l} <span class="mono">${fmtNum(c)}</span></button>`).join('');
+    }
+    const row = (g, i) => {
+      const isOpen = open.has(i);
+      return `
+      <div class="sn-row ${isOpen ? 'open' : ''}" data-i="${i}">
+        <button type="button" class="sn-main" data-toggle="${i}" aria-expanded="${isOpen}">
+          <span class="sn-name"><b data-nt>${esc(g.name)}</b>${g.name_te ? ` <span class="te" lang="te" data-nt>${esc(g.name_te)}</span>` : ''}</span>
+          <span class="sn-serials">${g.entries.map((e) => `<span class="sn-serial ${e.voter_id ? 'added' : ''}" title="${e.voter_id ? 'Added' : 'Not added'}"><span class="mono" data-nt>${esc(e.serial_no)}</span>${e.voter_id ? icon('check') : ''}</span>`).join('')}</span>
+          <span class="sn-hints">${g.duplicate ? `<span class="badge badge-red">${icon('copy')}Duplicate</span>` : ''}${g.hints.map((h) => `<span class="badge ${SN_HINTS[h][1]}">${SN_HINTS[h][0]}</span>`).join('')}</span>
+          <span class="sn-chev">${icon('arrow')}</span>
+        </button>
+        ${isOpen ? `<div class="table-wrap"><table class="table sn-table"><thead><tr><th>Serial</th><th>Voter ID</th><th>Name</th><th>Father/Husband</th><th>Age</th><th>Door</th><th>Part</th><th>Added</th></tr></thead><tbody>
+          ${g.entries.map((e) => `<tr>
+            <td class="mono"><b data-nt>${esc(e.serial_no)}</b></td><td class="mono" data-nt>${esc(e.epic || '—')}</td>
+            <td><span data-nt>${esc(e.name)}</span>${e.listed_twice ? ' <span class="badge badge-amber">Listed twice</span>' : ''}</td>
+            <td data-nt>${esc(e.relation_en || e.relation_te || '—')}</td><td class="mono">${e.age ?? '—'}</td>
+            <td data-nt>${esc(e.door_no || '—')}</td><td class="mono" data-nt>${esc(e.part_no || '—')}</td>
+            <td>${e.voter_id ? `<span class="badge badge-green">${icon('check')}Added</span> <span class="muted" data-nt>${esc(e.verified_by_name || '')}</span>`
+              : `<a class="btn btn-sm btn-brand" href="#/add?serial=${encodeURIComponent(e.serial_no)}">${icon('plus')}Add</a>`}</td></tr>`).join('')}
+          </tbody></table></div>` : ''}
+      </div>`;
+    };
+    function draw() {
+      const list = filtered();
+      $('#sn-sum').innerHTML = `<b class="mono">${fmtNum(list.length)}</b> <span>names</span> · <b class="mono">${fmtNum(list.reduce((a, g) => a + g.count, 0))}</b> <span>entries</span> · <span class="muted">tap a name to compare</span>`;
+      if (!data.roll_total) {
+        $('#sn-list').innerHTML = `<div class="card" style="margin-top:16px">${emptyState('list', 'The voter list isn’t uploaded yet', 'Duplicates are found in the voter list.')}</div>`;
+        return;
+      }
+      $('#sn-list').innerHTML = list.length
+        ? `<div class="card sn-card">${list.slice(0, shown).map((g) => row(g, data.groups.indexOf(g))).join('')}</div>`
+          + (list.length > shown ? `<button class="btn btn-ghost btn-block" id="sn-more" style="margin-top:16px">Show more (${fmtNum(list.length - shown)} left)</button>` : '')
+        : `<div class="card" style="margin-top:16px">${emptyState('check', 'Nobody found', 'No one with more than one vote matches this search.')}</div>`;
+    }
+    function toCsv() {
+      const cell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+      const rows = [['Group', 'Name', 'Serial numbers', 'Duplicate', 'Hints', 'Serial', 'Voter ID', 'Name (entry)', 'Name (Telugu)', 'Father/Husband', 'Age', 'Gender', 'Door No', 'Part', 'Listed twice', 'Added', 'Added by']];
+      filtered().forEach((g, n) => g.entries.forEach((e) => rows.push([n + 1, g.name, g.entries.map((x) => x.serial_no).join(' / '), g.duplicate ? 'Yes' : '',
+        g.hints.map((h) => SN_HINTS[h][0]).join('; '), e.serial_no, e.epic, e.name, e.name_te, e.relation_en || e.relation_te, e.age ?? '', e.gender,
+        e.door_no, e.part_no, e.listed_twice ? 'Yes' : '', e.voter_id ? 'Yes' : 'No', e.verified_by_name || ''])));
+      const blob = new Blob(['﻿' + rows.map((r) => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `34-division-same-names-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+    $('#sn-q').addEventListener('input', debounce((e) => {
+      f.q = e.target.value; shown = 60; keep();
+      if (data && /^\d+$/.test(f.q.trim())) filtered().forEach((g) => open.add(data.groups.indexOf(g)));
+      if (data) draw();
+    }, 200));
+    $('#sn-csv').addEventListener('click', () => data && toCsv());
+    el.addEventListener('click', (e) => {
+      const h = e.target.closest('[data-hint]');
+      if (h) { f.hint = h.dataset.hint; shown = 60; keep(); drawHints(); return draw(); }
+      if (e.target.closest('#sn-more')) { shown += 60; return draw(); }
+      const t = e.target.closest('[data-toggle]');
+      if (t) { const i = Number(t.dataset.toggle); if (open.has(i)) open.delete(i); else open.add(i); draw(); }
+    });
+    data = await api('GET', '/api/same-names');
+    if (!el.isConnected) return;
+    if (f.hint && f.hint !== 'none' && !SN_HINTS[f.hint]) f.hint = '';
+    // A search for one serial opens that name straight away.
+    if (/^\d+$/.test(f.q.trim())) filtered().forEach((g) => open.add(data.groups.indexOf(g)));
+    drawHints();
+    draw();
+    $('#sn-csv').disabled = !data.groups.length;
+  }
+
   async function viewMulti(el, params) {
+    if (params.get('tab') === 'names') return viewSameNames(el, params);
     const f = { reason: params.get('reason') || 'all', status: params.get('status') || '', q: params.get('q') || '' };
     let data = null;
     let shown = 30;
@@ -1051,6 +1175,7 @@
     el.innerHTML = `
       <div class="page-head"><div><h1>More than one vote</h1><p>People listed more than once in the voter list. Search any serial number to see all of that person’s serials.</p></div>
         <button class="btn btn-ghost" id="mv-csv" disabled>${icon('download')}Download CSV</button></div>
+      ${mvTabs('dup')}
       <div class="card">
         <div class="toolbar">
           <label class="search">${icon('search')}<input class="input" id="mv-q" type="search" value="${esc(f.q)}" placeholder="Search name, Telugu name, voter ID or serial" /></label>
