@@ -1046,11 +1046,11 @@
   const mvTabs = (active) => `
     <div class="seg-tabs" role="tablist">
       <a role="tab" href="#/multi" class="${active === 'dup' ? 'on' : ''}" aria-selected="${active === 'dup'}">${icon('copy')}Duplicates</a>
-      <a role="tab" href="#/multi?tab=names" class="${active === 'names' ? 'on' : ''}" aria-selected="${active === 'names'}">${icon('users')}Same name · check by hand</a>
+      <a role="tab" href="#/multi?tab=names" class="${active === 'names' ? 'on' : ''}" aria-selected="${active === 'names'}">${icon('users')}Check by hand</a>
     </div>`;
 
-  // Everyone in the voter list who shares a name with someone else, with their
-  // serial numbers side by side, for checking by hand (wider than Duplicates).
+  // Possible duplicates for checking by hand: same name + same father/husband +
+  // about the same age, with their serial numbers side by side.
   const SN_HINTS = {
     same_id: ['Same voter ID', 'badge-red'],
     same_house: ['Same house', 'badge-red'],
@@ -1065,7 +1065,7 @@
     let shown = 60;
     const open = new Set();
     el.innerHTML = `
-      <div class="page-head"><div><h1>More than one vote</h1><p>Everyone in the voter list who shares a name with someone else, with their serial numbers. Check them by hand so nobody is missed.</p></div>
+      <div class="page-head"><div><h1>More than one vote</h1><p>Same name, same father/husband and about the same age (within 2 years), with their serial numbers. Check them by hand so nobody is missed.</p></div>
         <button class="btn btn-ghost" id="sn-csv" disabled>${icon('download')}Download CSV</button></div>
       ${mvTabs('names')}
       <div class="card">
@@ -1094,7 +1094,7 @@
     }
     function drawHints() {
       const n = (h) => data.groups.filter((g) => (h === 'none' ? !g.hints.length : g.hints.includes(h))).length;
-      $('#sn-hints').innerHTML = [['', 'All', data.groups.length], ...Object.entries(SN_HINTS).map(([k, [l]]) => [k, l, n(k)]), ['none', 'No other match', n('none')]]
+      $('#sn-hints').innerHTML = [['', 'All', data.groups.length], ...Object.entries(SN_HINTS).map(([k, [l]]) => [k, l, n(k)])]
         .map(([k, l, c]) => `<button type="button" class="chip-btn ${f.hint === k ? 'on' : ''}" data-hint="${k}">${l} <span class="mono">${fmtNum(c)}</span></button>`).join('');
     }
     const row = (g, i) => {

@@ -119,17 +119,15 @@ together, everywhere:
   verified / not verified / *Added more than once*; search by name, Telugu name, voter ID or serial;
   *Mark double vote* (the note names the other serials); *Download CSV*.
 
-### Same name · check by hand
+### Check by hand
 
-The second tab on *More than one vote* is a deliberately wide list so nobody is missed: **everyone in
-the voter list who shares a name with someone else**, one row per name with all of their **serial
-numbers beside it** (green = already added). Names match in any word order, with or without spaces
-("Durgaprasad" = "Durga Prasad"), or by the same Telugu name. Each row shows hints (*Duplicate*,
-*Same voter ID*, *Same house*, *Added more than once*, *Same father/husband*, *Listed twice*,
-*Similar age*); the likeliest are listed first and each hint is a filter (*No other match* shows
-names that only share the name). Tap a name to compare its entries side by side (voter ID, father /
-husband, age, door, part, added by whom). Searching a serial number opens that person's row;
-*Download CSV* exports the list for checking on paper.
+The second tab on *More than one vote* lists **possible duplicates to check by hand**: entries with
+the **same name, the same father's/husband's name and about the same age** (within 2 years), or the
+same name and relative with both marked *listed twice* by the list. One row per person with all of
+their **serial numbers beside the name** (green = already added), hints (*Duplicate*, *Same house*,
+*Same father/husband*, *Similar age*, *Listed twice*, *Added more than once*) that are also filters,
+and a tap to compare the entries side by side (voter ID, father / husband, age, door, part, added by
+whom). Searching a serial number opens that person's row; *Download CSV* exports the list.
 
 ## Double vote
 

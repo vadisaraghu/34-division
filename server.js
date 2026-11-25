@@ -1058,30 +1058,36 @@ async function attachVoterDups(voters) {
   return voters;
 }
 
-// Same name in the voter list, for checking by hand: a deliberately wide net so
-// nobody is missed. Entries share a name when the English name matches in any
-// word order or with/without spaces ("Durgaprasad" = "Durga Prasad"), or the
-// Telugu name matches. Each group gets hints (same house / voter ID / father,
-// similar age, listed twice) so the likeliest are checked first.
+// Possible duplicates for checking by hand (the first rule used): the same
+// name + the same father's/husband's name + about the same age (within 2
+// years), or the same name + relative with both marked "listed twice" by the
+// list. Each group gets hints (same house / voter ID, listed twice, added more
+// than once) so the likeliest are checked first.
+const relKey = (r) => normName(r.relation_en || r.relation_te || '').replace(/\s+/g, '');
 let nameDupCache = null;
 async function nameGroups() {
   if (nameDupCache && Date.now() - nameDupCache.at < 10 * 60e3) return nameDupCache;
-  const { rows } = await pool.query('SELECT id, name, name_key, name_te FROM reference_voters ORDER BY id');
+  const { rows } = await pool.query(
+    'SELECT id, name_key, relation_en, relation_te, age, listed_twice FROM reference_voters ORDER BY id');
   const parent = rows.map((_, i) => i);
   const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const seen = new Map();
-  const once = (key, i) => {
-    if (!seen.has(key)) { seen.set(key, i); return; }
-    const x = find(seen.get(key)), y = find(i);
-    if (x !== y) parent[Math.max(x, y)] = Math.min(x, y);
-  };
+  const join = (a, b) => { const x = find(a), y = find(b); if (x !== y) parent[Math.max(x, y)] = Math.min(x, y); };
+  const byName = new Map();
   rows.forEach((r, i) => {
-    if (r.name_key) once(`k|${r.name_key}`, i);
-    const flat = normName(r.name).replace(/\s+/g, '');
-    if (flat.length >= 4) once(`f|${flat}`, i);
-    const te = String(r.name_te || '').replace(/\s+/g, '');
-    if (te) once(`t|${te}`, i);
+    const rk = relKey(r);
+    if (!r.name_key || !rk) return;
+    const k = `${r.name_key}|${rk}`;
+    if (!byName.has(k)) byName.set(k, []);
+    byName.get(k).push(i);
   });
+  for (const list of byName.values()) {
+    for (let a = 0; a < list.length; a++) {
+      for (let b = a + 1; b < list.length; b++) {
+        const x = rows[list[a]], y = rows[list[b]];
+        if (x.age == null || y.age == null || Math.abs(x.age - y.age) <= 2 || (x.listed_twice && y.listed_twice)) join(list[a], list[b]);
+      }
+    }
+  }
   const members = new Map();
   rows.forEach((r, i) => { const g = find(i); if (!members.has(g)) members.set(g, []); members.get(g).push(rows[i].id); });
   nameDupCache = { at: Date.now(), groups: [...members.values()].filter((ids) => ids.length > 1), total: rows.length };
