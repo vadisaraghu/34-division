@@ -963,19 +963,20 @@ app.get('/api/reference/search', auth, wrap(async (req, res) => {
 
 // ---------- duplicate entries in the voter list ----------
 // Entries of the uploaded voter list that are the same person: they share a
-// voter ID (EPIC), or the same name + father's/husband's name + about the same
-// age (within 2 years), or the same name + relative with both marked "listed
-// twice" by the list itself. An entry the list marks "listed twice" is included
-// even when its other entry can't be found. Worked out from the voter list only
-// (never from the voters volunteers added), in memory, cached until re-upload.
-const relKey = (r) => normName(r.relation_en || r.relation_te || '').replace(/\s+/g, '');
+// voter card number (EPIC), or the same name AND the same house (door) number.
+// House numbers are compared without spaces / punctuation ("11-285 A/2" =
+// "11-285A/2"); names in English (any word order) or in Telugu. A duplicate
+// needs at least two entries; the list's own "listed twice" mark is shown as a
+// reason. Worked out from the voter list only (never from the voters volunteers
+// added), in memory, cached until re-upload.
 const epicKey = (e) => String(e || '').replace(/\s+/g, '').toUpperCase();
+const doorKey = (d) => String(d || '').toUpperCase().replace(/[^0-9A-Zఀ-౿]/g, '');
 let dupCache = null;
 const dupReset = () => { dupCache = null; };
 async function dupIndex() {
   if (dupCache && Date.now() - dupCache.at < 10 * 60e3) return dupCache;
   const { rows } = await pool.query(
-    'SELECT id, name_key, relation_en, relation_te, age, epic, listed_twice FROM reference_voters ORDER BY id');
+    'SELECT id, name_key, name_te, door_no, epic, listed_twice FROM reference_voters ORDER BY id');
   const parent = rows.map((_, i) => i);
   const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   const why = rows.map(() => new Set());
@@ -984,28 +985,19 @@ async function dupIndex() {
     const x = find(a), y = find(b);
     if (x !== y) parent[Math.max(x, y)] = Math.min(x, y);
   };
-  const byEpic = new Map();
-  const byName = new Map();
+  const seen = new Map();
+  const once = (key, i, reason) => { if (seen.has(key)) link(seen.get(key), i, reason); else seen.set(key, i); };
   rows.forEach((r, i) => {
     const e = epicKey(r.epic);
-    if (e) { if (byEpic.has(e)) link(byEpic.get(e), i, 'same_id'); else byEpic.set(e, i); }
-    const rk = relKey(r);
-    if (rk) {
-      const k = `${r.name_key}|${rk}`;
-      if (!byName.has(k)) byName.set(k, []);
-      byName.get(k).push(i);
+    if (e) once(`id|${e}`, i, 'same_id');
+    const d = doorKey(r.door_no);
+    if (d) {
+      if (r.name_key) once(`en|${d}|${r.name_key}`, i, 'same_house');
+      const te = String(r.name_te || '').replace(/\s+/g, '');
+      if (te) once(`te|${d}|${te}`, i, 'same_house');
     }
     if (r.listed_twice) why[i].add('listed_twice');
   });
-  for (const list of byName.values()) {
-    for (let a = 0; a < list.length; a++) {
-      for (let b = a + 1; b < list.length; b++) {
-        const x = rows[list[a]], y = rows[list[b]];
-        if (x.age == null || y.age == null || Math.abs(x.age - y.age) <= 2) link(list[a], list[b], 'same_name');
-        else if (x.listed_twice && y.listed_twice) link(list[a], list[b], 'listed_twice');
-      }
-    }
-  }
   const members = new Map();
   rows.forEach((r, i) => {
     const g = find(i);
@@ -1016,7 +1008,7 @@ async function dupIndex() {
   const groups = new Map(); // group id -> { ids, reasons }
   for (const idx of members.values()) {
     const reasons = [...new Set(idx.flatMap((i) => [...why[i]]))];
-    if (idx.length < 2 && !reasons.length) continue;
+    if (idx.length < 2) continue; // a duplicate needs at least two entries
     const gid = rows[idx[0]].id;
     groups.set(gid, { ids: idx.map((i) => rows[i].id), reasons });
     idx.forEach((i) => byId.set(rows[i].id, gid));
@@ -1083,13 +1075,13 @@ app.get('/api/multi-votes', auth, wrap(async (req, res) => {
   const num = (s) => Number(s) || 0;
   const people = [...idx.groups.values()].map((g) => {
     const entries = g.ids.map((id) => by.get(id)).filter(Boolean).sort((a, b) => num(a.serial_no) - num(b.serial_no));
-    return { votes: Math.max(entries.length, 2), reasons: g.reasons, added: entries.filter((e) => e.voter_id).length, entries };
+    return { votes: entries.length, reasons: g.reasons, added: entries.filter((e) => e.voter_id).length, entries };
   }).sort((a, b) => b.votes - a.votes || num(a.entries[0].serial_no) - num(b.entries[0].serial_no));
   const count = (r) => people.filter((p) => p.reasons.includes(r)).length;
   res.json({
     roll_total: idx.total,
     people,
-    counts: { all: people.length, same_id: count('same_id'), same_name: count('same_name'), listed_twice: count('listed_twice'),
+    counts: { all: people.length, same_id: count('same_id'), same_house: count('same_house'), listed_twice: count('listed_twice'),
       added_twice: people.filter((p) => p.added > 1).length },
   });
 }));

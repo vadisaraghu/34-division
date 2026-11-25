@@ -1040,7 +1040,7 @@
   // twice". Worked out from the voter list only, not from the added voters.
   const MV_REASONS = {
     same_id: ['Same voter ID', 'badge-red'],
-    same_name: ['Same name, father/husband and age', 'badge-amber'],
+    same_house: ['Same name and house number', 'badge-amber'],
     listed_twice: ['Listed twice in the voter list', 'badge-amber'],
   };
   async function viewMulti(el, params) {

@@ -53,7 +53,7 @@
     'The voter list marks this entry as listed twice.': 'ఓటరు జాబితా ఈ ఎంట్రీని రెండుసార్లు ఉన్నట్లు చూపుతోంది.',
     'Search name, Telugu name, voter ID or serial': 'పేరు, తెలుగు పేరు, ఓటరు ID లేదా సీరియల్ వెతకండి',
     'Verified or not': 'ధృవీకరించినవి / కానివి', 'Not verified yet': 'ఇంకా ధృవీకరించలేదు',
-    'All': 'అన్నీ', 'Same voter ID': 'ఒకే ఓటరు ఐడీ', 'Same name, father/husband and age': 'ఒకే పేరు, తండ్రి/భర్త, వయసు',
+    'All': 'అన్నీ', 'Same voter ID': 'ఒకే ఓటరు ఐడీ', 'Same name and house number': 'ఒకే పేరు, ఒకే ఇంటి నంబర్',
     'Marked double vote': 'డబుల్ ఓటుగా గుర్తించారు',
     'Part': 'భాగం', 'Mark double vote': 'డబుల్ ఓటుగా గుర్తించు', 'Marked as double vote': 'డబుల్ ఓటుగా గుర్తించబడింది',
     'people': 'మంది', 'votes': 'ఓట్లు', 'voter list:': 'ఓటరు జాబితా:', 'Nobody found': 'ఎవరూ దొరకలేదు',

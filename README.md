@@ -97,11 +97,13 @@ so a filtered view can be bookmarked or shared.
 Duplicates are found **only in the uploaded voter list** (not from the voters volunteers add). Entries
 are the same person when:
 
-- the **same voter ID** appears more than once,
-- the **same name + same father's/husband's name + about the same age** (within 2 years) appears
-  more than once, usually under different voter IDs (the father's name may be spelled differently,
-  e.g. "Venkateswara Rao" / "Venkateswararao"), or
-- the voter list itself marks the entries **listed twice**.
+- the **same voter card number** (voter ID) appears more than once, or
+- the **same name and the same house (door) number** appear more than once. House numbers are
+  compared without spaces or punctuation ("11-285 A/2" = "11-285A/2"); names in any word order, or
+  the same Telugu name.
+
+Father's / husband's name and age are shown on every entry but don't decide it. The list's own
+"listed twice" mark is shown as a reason, but on its own it doesn't make two entries duplicates.
 
 Searching **any one serial number** of such a person brings up **all** of their serial numbers
 together, everywhere:
